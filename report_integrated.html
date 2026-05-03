@@ -48,11 +48,9 @@ body{font-family:"Microsoft YaHei","SimHei",sans-serif;background:#1a1a2e;color:
   <span class="cfg">地图数据: 高德 | 国家名称: 中文</span>
 </div>
 <div class="top-bar">
-  <label>高度偏差: <input type="range" id="altSlider" min="200" max="3000" value="{{H_THRESHOLD}}" step="100">
-    <span class="val" id="altVal">{{H_THRESHOLD}}</span> ft</label>
-  <label>持续距离: <input type="range" id="durSlider" min="20" max="500" value="{{V_THRESHOLD}}" step="10">
-    <span class="val" id="durVal">{{V_THRESHOLD}}</span> nm</label>
-  <label><input type="checkbox" id="cruiseOnly" checked> 仅巡航</label>
+  <span class="stat">高度偏差阈值: <span>{{H_THRESHOLD}}</span> ft</span>
+  <span class="stat">持续时间阈值: <span>{{V_THRESHOLD}}</span> nm</span>
+  <label><input type="checkbox" id="cruiseOnly" checked> 仅巡航段</label>
   <span class="stat">选中: <span id="selCount">0</span>/<span id="totalCount">0</span></span>
   <span class="stat">超限点: <span id="exceedCount" class="danger">0</span></span>
   <button onclick="refreshAll()" style="background:#e94560;color:#fff;border:none;padding:4px 12px;border-radius:4px;cursor:pointer;">刷新</button>
@@ -69,7 +67,6 @@ body{font-family:"Microsoft YaHei","SimHei",sans-serif;background:#1a1a2e;color:
   <div class="map-panel" id="map"></div>
   <div class="right-panel">
     <div class="chart-box" id="chartAlt"></div>
-    <div class="chart-box" id="chartXT"></div>
     <div class="text-box" id="reportText">{{REPORT_TEXT}}</div>
   </div>
 </div>
@@ -81,7 +78,6 @@ const DAY_COLORS = ['#e6194b','#3cb44b','#ffe119','#4363d8','#f58231','#911eb4',
   '#469990','#dcbeff','#9A6324','#fffac8','#800000','#aaffc3','#808000','#ffd8b1','#000075','#a9a9a9'];
 
 let altThreshold = {{H_THRESHOLD}};
-let durThreshold = {{V_THRESHOLD}};
 let cruiseOnly = true;
 
 // Map with Gaode Chinese tiles
@@ -91,7 +87,6 @@ L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scal
 }).addTo(map);
 
 const chartAlt = echarts.init(document.getElementById('chartAlt'));
-const chartXT = echarts.init(document.getElementById('chartXT'));
 
 // Build flight list
 function buildFlightList(){
@@ -165,35 +160,49 @@ function updateMap(){
 
 function updateCharts(){
   const selected = getSelectedKeys();
-  const altSeries=[], xtSeries=[];
+  const series=[];
+  // Plan altitude (from first selected day)
   if(selected.length>0){
     const first = ALL_DAYS[selected[0]];
     if(first && first.plan_waypoints){
-      altSeries.push({name:'计划高度',type:'line',data:first.plan_waypoints.map(w=>[w.dist,w.alt]),
-        lineStyle:{color:'#ffaa00',width:2,type:'dashed'},symbol:'none'});
+      series.push({name:'计划高度',type:'line',data:first.plan_waypoints.map(w=>[w.dist,w.alt]),
+        lineStyle:{color:'#ffaa00',width:2.5,type:'dashed'},symbol:'none'});
     }
   }
+  // Actual altitude for each selected flight
   selected.forEach((key,idx)=>{
     const data = ALL_DAYS[key];
     if(!data||!data.deviation_data) return;
     const pts = data.deviation_data.filter(p=>cruiseOnly?p.is_cruise:true);
     if(pts.length===0) return;
     const color = DAY_COLORS[idx % DAY_COLORS.length];
-    altSeries.push({name:key,type:'line',data:pts.map(p=>[p.dis,p.alt]),
-      lineStyle:{color,width:1},symbol:'none'});
-    xtSeries.push({name:key,type:'line',data:pts.map(p=>[p.dis,Math.abs(p.xt)]),
-      lineStyle:{color,width:1},symbol:'none'});
+    series.push({name:'实际高度',type:'line',data:pts.map(p=>[p.dis,p.alt]),
+      lineStyle:{color,width:1.2},symbol:'none'});
+  });
+  // Remove duplicate '实际高度' legend entries by merging
+  const merged = []; const seenNames = new Set();
+  series.forEach(s => {
+    if(seenNames.has(s.name)) return;
+    seenNames.add(s.name);
+    // For '实际高度' with multiple flights, only keep one legend entry (first)
+    merged.push(s);
   });
   chartAlt.setOption({title:{text:'高度剖面对比',left:'center',textStyle:{color:'#ccc',fontSize:13}},
-    tooltip:{trigger:'axis'},legend:{bottom:0,textStyle:{color:'#aaa',fontSize:9}},
-    grid:{top:35,bottom:35,left:50,right:15},xAxis:{type:'value',name:'',nameTextStyle:{color:'#888'}},
-    yAxis:{type:'value',name:'Height (ft)',nameTextStyle:{color:'#888'}},
-    series:altSeries,backgroundColor:'transparent'});
-  chartXT.setOption({title:{text:'水平偏差',left:'center',textStyle:{color:'#ccc',fontSize:13}},
-    tooltip:{trigger:'axis'},legend:{bottom:0,textStyle:{color:'#aaa',fontSize:9}},
-    grid:{top:35,bottom:35,left:50,right:15},xAxis:{type:'value',name:'',nameTextStyle:{color:'#888'}},
-    yAxis:{type:'value',name:'XT (nm)',nameTextStyle:{color:'#888'}},
-    series:xtSeries,backgroundColor:'transparent'});
+    tooltip:{trigger:'axis',
+      formatter: function(params){
+        let html = '';
+        for(let i=0;i<params.length;i++){
+          const p = params[i];
+          html += p.marker+' '+p.seriesName+': '+p.value[1].toFixed(0)+' ft<br/>';
+        }
+        return html;
+      }
+    },
+    legend:{bottom:0,textStyle:{color:'#aaa',fontSize:9},data:['计划高度','实际高度']},
+    grid:{top:35,bottom:35,left:55,right:15},
+    xAxis:{type:'value',name:'',nameTextStyle:{color:'#888'},axisLabel:{fontSize:10}},
+    yAxis:{type:'value',name:'Height (ft)',nameTextStyle:{color:'#888'},axisLabel:{fontSize:10}},
+    series:series,backgroundColor:'transparent'});
 }
 
 function updateExceed(){
@@ -211,13 +220,9 @@ function updateExceed(){
 function selAll(){ document.querySelectorAll('#flightList input').forEach(c=>c.checked=true);refreshAll(); }
 function selNone(){ document.querySelectorAll('#flightList input').forEach(c=>c.checked=false);refreshAll(); }
 
-document.getElementById('altSlider').addEventListener('input',function(){
-  altThreshold=parseInt(this.value);document.getElementById('altVal').textContent=altThreshold;refreshAll();});
-document.getElementById('durSlider').addEventListener('input',function(){
-  durThreshold=parseInt(this.value);document.getElementById('durVal').textContent=durThreshold;refreshAll();});
 document.getElementById('cruiseOnly').addEventListener('change',function(){
   cruiseOnly=this.checked;refreshAll();});
-window.addEventListener('resize',()=>{chartAlt.resize();chartXT.resize();});
+window.addEventListener('resize',()=>{chartAlt.resize();});
 
 buildFlightList();
 // Select first flight only by default

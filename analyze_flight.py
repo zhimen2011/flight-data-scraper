@@ -47,7 +47,7 @@ REGION_LABELS = {
 }
 # Default deviation filter thresholds
 DEFAULT_MIN_ALT_DEV_FT = 1000
-DEFAULT_MIN_DURATION_NM = 200
+DEFAULT_MIN_DURATION_NM = 50
 
 def load_config():
     """Load analysis config from JSON file, with fallback to defaults."""

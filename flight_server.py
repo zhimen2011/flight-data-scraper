@@ -122,8 +122,8 @@ select:focus{outline:none;border-color:#e94560;}
   <div class="config-row">
     <label>高度偏差阈值: <input type="range" id="aAlt" min="200" max="3000" value="1000" step="100" oninput="$('aAltVal').textContent=$('aAlt').value">
       <span class="val" id="aAltVal">1000</span> ft</label>
-    <label>持续时间阈值: <input type="range" id="aDur" min="20" max="500" value="200" step="10" oninput="$('aDurVal').textContent=$('aDur').value">
-      <span class="val" id="aDurVal">200</span> nm</label>
+    <label>持续时间阈值: <input type="range" id="aDur" min="10" max="500" value="50" step="10" oninput="$('aDurVal').textContent=$('aDur').value">
+      <span class="val" id="aDurVal">50</span> nm</label>
     <label><input type="checkbox" id="aCruise" checked> 仅巡航段</label>
     <button class="btn-secondary" onclick="saveConfig()">保存为默认</button>
   </div>
@@ -603,7 +603,9 @@ class FlightAPIHandler(BaseHTTPRequestHandler):
         api_cfg=load_api_config();rn="航班分析"
         for k in FlightAPIHandler.analysis_results: rn=k.split("_")[0];break
         dl=sorted(set(k.rsplit("_",1)[1] for k in FlightAPIHandler.analysis_results))
-        config={"min_alt_deviation_ft":1000,"min_duration_nm":200}
+        # Use same config as word report (from analysis_config.json)
+        acfg = load_config()
+        config={"min_alt_deviation_ft":acfg.get("min_alt_deviation_ft",1000),"min_duration_nm":acfg.get("min_duration_nm",50)}
         sp=self._get_sys_prompt()
         up=build_user_prompt(analysis,{"route_name":rn,"date_range":f"{dl[0]}至{dl[-1]}"})
         try:
