@@ -4,3 +4,4 @@ deepseek_config.json
 reports/
 *.tmp
 ~$*.docx
+*.json.tmp

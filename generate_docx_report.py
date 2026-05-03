@@ -146,15 +146,15 @@ def format_fl_deviation(plan_alt, actual_alt, region=None):
     """
     plan_fl = nearest_valid_fl(plan_alt)
     actual_fl = nearest_valid_fl(actual_alt)
-    diff_fl = abs(plan_fl - actual_fl)
+    diff_levels = abs(plan_fl - actual_fl) // 10  # FL351 vs FL291 = 6 levels, not 60
     diff_ft = abs(plan_alt - actual_alt)
 
     direction = "高于" if actual_alt > plan_alt else "低于"
     plan_fmt = format_altitude(plan_alt, region)
     actual_fmt = format_altitude(actual_alt, region)
 
-    if diff_fl >= 1:
-        return f"{direction}计划高度{diff_fl}个高度层({plan_fmt}→{actual_fmt})"
+    if diff_levels >= 1:
+        return f"{direction}计划高度{diff_levels}个高度层({plan_fmt}→{actual_fmt})"
     else:
         return f"{direction}计划高度约{diff_ft:.0f}ft({plan_fmt}→{actual_fmt})"
 
