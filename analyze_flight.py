@@ -276,6 +276,18 @@ def load_plan_track(filepath):
         except (ValueError, TypeError):
             continue
     waypoints.sort(key=lambda w: w["dist"])
+
+    # If all dist values are 0 (missing column in CSV), compute from lat/lon
+    if len(waypoints) >= 2 and all(w["dist"] == 0 for w in waypoints):
+        cum = 0.0
+        waypoints[0]["dist"] = 0.0
+        for i in range(1, len(waypoints)):
+            cum += haversine_distance(
+                waypoints[i-1]["lat"], waypoints[i-1]["lon"],
+                waypoints[i]["lat"], waypoints[i]["lon"]
+            )
+            waypoints[i]["dist"] = cum
+
     # De-duplicate by dist
     seen = set()
     unique = []
