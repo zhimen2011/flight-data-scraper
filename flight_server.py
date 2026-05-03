@@ -363,6 +363,7 @@ loadApiCfg();loadPrompt();refreshAnalyze();refreshReports();
 class FlightAPIHandler(BaseHTTPRequestHandler):
     search_pool = []
     analysis_results = {}
+    last_config = {"min_alt_deviation_ft": 1000, "min_duration_nm": 50}
     country_index = None
     ref_main_text = ""
     ref_app_text = ""
@@ -570,6 +571,7 @@ class FlightAPIHandler(BaseHTTPRequestHandler):
                 r=analyze_flight(pf,af,config,FlightAPIHandler.country_index)
                 if r: results[key]=r
         FlightAPIHandler.analysis_results=results
+        FlightAPIHandler.last_config=config
         self._send_json({"status":f"完成 {len(results)} 个航班","count":len(results)})
 
     # ── API: Generate Reports ──
@@ -603,9 +605,7 @@ class FlightAPIHandler(BaseHTTPRequestHandler):
         api_cfg=load_api_config();rn="航班分析"
         for k in FlightAPIHandler.analysis_results: rn=k.split("_")[0];break
         dl=sorted(set(k.rsplit("_",1)[1] for k in FlightAPIHandler.analysis_results))
-        # Use same config as word report (from analysis_config.json)
-        acfg = load_config()
-        config={"min_alt_deviation_ft":acfg.get("min_alt_deviation_ft",1000),"min_duration_nm":acfg.get("min_duration_nm",50)}
+        config = FlightAPIHandler.last_config
         sp=self._get_sys_prompt()
         up=build_user_prompt(analysis,{"route_name":rn,"date_range":f"{dl[0]}至{dl[-1]}"})
         try:

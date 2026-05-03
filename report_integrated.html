@@ -67,6 +67,7 @@ body{font-family:"Microsoft YaHei","SimHei",sans-serif;background:#1a1a2e;color:
   <div class="map-panel" id="map"></div>
   <div class="right-panel">
     <div class="chart-box" id="chartAlt"></div>
+    <div class="chart-box" id="chartXT"></div>
     <div class="text-box" id="reportText">{{REPORT_TEXT}}</div>
   </div>
 </div>
@@ -87,6 +88,7 @@ L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scal
 }).addTo(map);
 
 const chartAlt = echarts.init(document.getElementById('chartAlt'));
+const chartXT = echarts.init(document.getElementById('chartXT'));
 
 // Build flight list
 function buildFlightList(){
@@ -160,49 +162,63 @@ function updateMap(){
 
 function updateCharts(){
   const selected = getSelectedKeys();
-  const series=[];
-  // Plan altitude (from first selected day)
+  const altSeries=[], xtSeries=[];
+  let planDistMap = {}; // For tooltip lookup: dist->plan_alt
   if(selected.length>0){
     const first = ALL_DAYS[selected[0]];
     if(first && first.plan_waypoints){
-      series.push({name:'计划高度',type:'line',data:first.plan_waypoints.map(w=>[w.dist,w.alt]),
+      altSeries.push({name:'计划高度',type:'line',data:first.plan_waypoints.map(w=>[w.dist,w.alt]),
         lineStyle:{color:'#ffaa00',width:2.5,type:'dashed'},symbol:'none'});
+      first.plan_waypoints.forEach(w=>{planDistMap[w.dist.toFixed(1)]=w.alt;});
     }
   }
-  // Actual altitude for each selected flight
   selected.forEach((key,idx)=>{
     const data = ALL_DAYS[key];
     if(!data||!data.deviation_data) return;
     const pts = data.deviation_data.filter(p=>cruiseOnly?p.is_cruise:true);
     if(pts.length===0) return;
     const color = DAY_COLORS[idx % DAY_COLORS.length];
-    series.push({name:'实际高度',type:'line',data:pts.map(p=>[p.dis,p.alt]),
+    altSeries.push({name:'实际高度',type:'line',data:pts.map(p=>[p.dis,p.alt]),
       lineStyle:{color,width:1.2},symbol:'none'});
+    xtSeries.push({name:key,type:'line',data:pts.map(p=>[p.dis,Math.abs(p.xt)]),
+      lineStyle:{color,width:1},symbol:'none'});
   });
-  // Remove duplicate '实际高度' legend entries by merging
-  const merged = []; const seenNames = new Set();
-  series.forEach(s => {
-    if(seenNames.has(s.name)) return;
-    seenNames.add(s.name);
-    // For '实际高度' with multiple flights, only keep one legend entry (first)
-    merged.push(s);
-  });
-  chartAlt.setOption({title:{text:'高度剖面对比',left:'center',textStyle:{color:'#ccc',fontSize:13}},
-    tooltip:{trigger:'axis',
-      formatter: function(params){
-        let html = '';
-        for(let i=0;i<params.length;i++){
-          const p = params[i];
-          html += p.marker+' '+p.seriesName+': '+p.value[1].toFixed(0)+' ft<br/>';
-        }
-        return html;
+  // Merge duplicate legend for '实际高度'
+  const mergedAlt = []; const sn = new Set();
+  altSeries.forEach(s=>{if(!sn.has(s.name)){sn.add(s.name);mergedAlt.push(s);}});
+
+  // Tooltip that shows plan + actual
+  function tooltipFormatter(params){
+    let dist = params[0]?.value[0];
+    let html = '<b>距离: '+(dist?dist.toFixed(0):'?')+' nm</b><br/>';
+    for(let p of params){
+      if(p.seriesName==='计划高度'){
+        html += p.marker+' 计划高度: '+p.value[1].toFixed(0)+' ft<br/>';
       }
-    },
+    }
+    for(let p of params){
+      if(p.seriesName==='实际高度'){
+        html += p.marker+' 实际高度: '+p.value[1].toFixed(0)+' ft<br/>';
+      }
+    }
+    return html;
+  }
+
+  chartAlt.setOption({title:{text:'高度剖面对比',left:'center',textStyle:{color:'#ccc',fontSize:13}},
+    tooltip:{trigger:'axis',formatter:tooltipFormatter},
     legend:{bottom:0,textStyle:{color:'#aaa',fontSize:9},data:['计划高度','实际高度']},
     grid:{top:35,bottom:35,left:55,right:15},
     xAxis:{type:'value',name:'',nameTextStyle:{color:'#888'},axisLabel:{fontSize:10}},
     yAxis:{type:'value',name:'Height (ft)',nameTextStyle:{color:'#888'},axisLabel:{fontSize:10}},
-    series:series,backgroundColor:'transparent'});
+    series:mergedAlt,backgroundColor:'transparent'});
+
+  chartXT.setOption({title:{text:'水平偏差',left:'center',textStyle:{color:'#ccc',fontSize:13}},
+    tooltip:{trigger:'axis'},
+    legend:{bottom:0,textStyle:{color:'#aaa',fontSize:9}},
+    grid:{top:35,bottom:35,left:55,right:15},
+    xAxis:{type:'value',name:'',nameTextStyle:{color:'#888'},axisLabel:{fontSize:10}},
+    yAxis:{type:'value',name:'XT (nm)',nameTextStyle:{color:'#888'},axisLabel:{fontSize:10}},
+    series:xtSeries,backgroundColor:'transparent'});
 }
 
 function updateExceed(){
@@ -222,7 +238,7 @@ function selNone(){ document.querySelectorAll('#flightList input').forEach(c=>c.
 
 document.getElementById('cruiseOnly').addEventListener('change',function(){
   cruiseOnly=this.checked;refreshAll();});
-window.addEventListener('resize',()=>{chartAlt.resize();});
+window.addEventListener('resize',()=>{chartAlt.resize();chartXT.resize();});
 
 buildFlightList();
 // Select first flight only by default
