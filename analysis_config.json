@@ -1,4 +1,4 @@
 {
   "min_alt_deviation_ft": 1000,
-  "min_duration_nm": 200
+  "min_duration_nm": 50
 }

@@ -875,6 +875,7 @@ def analyze_flight(plan_file, actual_file, config, country_index):
                 "alt_dev": round(r["alt_dev_ft"], 0),
                 "fuel_dev": round(r["fuel_dev_lbs"], 0),
                 "region": r["region"],
+                "country": r.get("country", ""),
                 "is_cruise": r["is_cruise"],
             }
             for r in dev_results
