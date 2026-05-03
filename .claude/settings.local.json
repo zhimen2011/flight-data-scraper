@@ -46,7 +46,19 @@
       "Bash(git commit *)",
       "Bash(git rm *)",
       "Bash(taskkill /F /IM python.exe)",
-      "Bash(cat C:\\\\\\\\Users\\\\\\\\78590\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\E--TEST-flight-data-scraper\\\\\\\\161f247e-2920-490b-b403-2595c59d3c89\\\\\\\\tasks\\\\\\\\bj426i55j.output)"
+      "Bash(cat C:\\\\\\\\Users\\\\\\\\78590\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\E--TEST-flight-data-scraper\\\\\\\\161f247e-2920-490b-b403-2595c59d3c89\\\\\\\\tasks\\\\\\\\bj426i55j.output)",
+      "Bash(curl -s http://localhost:8765/api/list_csv)",
+      "Bash(curl -s \"http://localhost:8765/api/search?flight=I99806&aircraft=&from=2026-04-01&to=2026-04-30\")",
+      "Bash(curl -s \"http://localhost:8765/api/search?flight=I99806&from=2026-04-01&to=2026-04-30\")",
+      "Bash(netstat -ano)",
+      "Bash(taskkill /F /PID 10488)",
+      "Bash(taskkill /F /PID 15584)",
+      "Bash(taskkill /F /PID 16768)",
+      "Bash(taskkill /F /PID 740)",
+      "Bash(taskkill /F /PID 7964)",
+      "Bash(wmic process *)",
+      "Bash(curl -s http://localhost:8765/)",
+      "Bash(curl -s http://localhost:8765/api/load_api_cfg)"
     ]
   }
 }
