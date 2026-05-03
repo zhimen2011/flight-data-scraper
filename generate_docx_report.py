@@ -171,7 +171,7 @@ def generate_profile_chart(plan_wp, actual_pts, dev_results, flight, date_str, o
 
     ax.plot(plan_dists, plan_alts, '#E8A317', linewidth=2, label='Plan')
     ax.plot(actual_dists, actual_alts, '#1565C0', linewidth=1.5, label='Actual')
-    ax.set_xlabel('Distance (nm)', fontsize=10)
+    ax.set_xlabel('', fontsize=10)  # distance uncertain, omit label
     ax.set_ylabel('Altitude (ft)', fontsize=10)
     ax.set_title(f'{flight}  {date_str}  Plan vs Actual Altitude Profile', fontsize=12, fontweight='bold')
     ax.legend(loc='upper right', fontsize=9, framealpha=0.8)

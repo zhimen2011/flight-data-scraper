@@ -281,6 +281,92 @@ def build_user_prompt(analysis, config):
 
 # ─── Docx Finalizer (matching original report formatting) ────────────────────
 
+def generate_integrated_html(analysis, ai_report_md, config, output_path):
+    """Generate integrated HTML report embedding all analysis data + AI text."""
+    import json as _json
+    template_path = os.path.join(BASE_DIR, "report_integrated.html")
+    if not os.path.exists(template_path):
+        print("  WARNING: report_integrated.html not found, skipping HTML generation")
+        return None
+    with open(template_path, "r", encoding="utf-8") as f:
+        template = f.read()
+
+    # Build per-flight data for JS
+    all_days = {}
+    for key, result in sorted(analysis.get("flights", {}).items()):
+        parts = key.rsplit("_", 1)
+        date_str = parts[1] if len(parts) > 1 else key
+        all_days[date_str] = {
+            "metadata": result.get("metadata", {}),
+            "plan_waypoints": result.get("plan_waypoints", []),
+            "deviation_data": result.get("deviation_data", []),
+            "warnings": result.get("warnings", []),
+            "descent_analysis": result.get("descent_analysis"),
+        }
+
+    flight_name = "航班分析"
+    for key in analysis.get("flights", {}):
+        flight_name = key.split("_")[0]
+        break
+
+    html = template.replace("{{TITLE}}", f"{flight_name} 偏差分析报告")
+    html = html.replace("{{FLIGHT}}", flight_name)
+    html = html.replace("{{H_THRESHOLD}}", str(config.get("min_alt_deviation_ft", 1000)))
+    html = html.replace("{{V_THRESHOLD}}", str(config.get("min_duration_nm", 200)))
+    html = html.replace("{{ALL_DAYS_JSON}}", _json.dumps(all_days, ensure_ascii=False))
+    html = html.replace("{{REPORT_MD_JSON}}", _json.dumps(ai_report_md, ensure_ascii=False))
+
+    # Simple markdown → HTML for report text
+    md_html = _md_to_html(ai_report_md)
+    html = html.replace("{{REPORT_TEXT}}", md_html)
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(html)
+    print(f"  整合 HTML 报告已生成: {output_path}")
+    return output_path
+
+
+def _md_to_html(md_text):
+    """Basic markdown to HTML converter for report text."""
+    lines = md_text.split("\n")
+    result = []
+    in_table = False
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            result.append("<br>")
+            continue
+        if stripped.startswith("|") and "|" in stripped[1:]:
+            if not in_table:
+                result.append('<table class="md-table">')
+                in_table = True
+            cells = stripped.split("|")[1:-1]
+            is_header = all(c.strip().startswith(":") or c.strip().startswith("-") for c in cells if c.strip())
+            if is_header:
+                continue
+            tag = "th" if in_table and not result[-1].startswith("<tr>") else "td"
+            result.append("<tr>" + "".join(f"<{tag}>{c.strip()}</{tag}>" for c in cells) + "</tr>")
+            continue
+        else:
+            if in_table:
+                result.append("</table>")
+                in_table = False
+        if stripped.startswith("# ") and not stripped.startswith("## "):
+            result.append(f"<h1>{stripped[2:]}</h1>")
+        elif stripped.startswith("## "):
+            result.append(f"<h2>{stripped[3:]}</h2>")
+        elif stripped.startswith("### "):
+            result.append(f"<h3>{stripped[4:]}</h3>")
+        elif stripped.startswith("- "):
+            result.append(f"<p>{stripped}</p>")
+        else:
+            result.append(f"<p>{stripped}</p>")
+    if in_table:
+        result.append("</table>")
+    return "\n".join(result)
+
+
 def finalize_to_docx(draft_path, analysis, output_path):
     """Convert markdown draft to .docx matching the original report's formatting:
     - 宋体 throughout
@@ -479,17 +565,7 @@ def _generate_appendix(analysis, output_path, font_name):
                 doc.add_picture(chart_path, width=Inches(5.5))
                 doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-        # Notes
-        warnings = result.get("warnings", [])[:2]
-        for w in warnings:
-            p = doc.add_paragraph()
-            run = p.add_run(
-                f"{w['region']} {w['direction']} "
-                f"计划{w['plan_alt']:.0f}ft→实际{w['actual_alt']:.0f}ft"
-            )
-            run.font.name = font_name
-            run._element.rPr.rFonts.set(qn('w:eastAsia'), font_name)
-            run.font.size = Pt(9)
+        # No text notes in appendix per user request
 
     doc.save(output_path)
 

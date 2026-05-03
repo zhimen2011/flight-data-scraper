@@ -47,7 +47,20 @@ REGION_LABELS = {
 }
 # Default deviation filter thresholds
 DEFAULT_MIN_ALT_DEV_FT = 1000
-DEFAULT_MIN_DURATION_NM = 50
+DEFAULT_MIN_DURATION_NM = 200
+
+def load_config():
+    """Load analysis config from JSON file, with fallback to defaults."""
+    cfg_path = os.path.join(BASE_DIR, "analysis_config.json")
+    cfg = {"min_alt_deviation_ft": DEFAULT_MIN_ALT_DEV_FT,
+           "min_duration_nm": DEFAULT_MIN_DURATION_NM}
+    if os.path.exists(cfg_path):
+        try:
+            with open(cfg_path, "r") as f:
+                cfg.update(json.load(f))
+        except Exception:
+            pass
+    return cfg
 
 # ─── Geo Math ────────────────────────────────────────────────────────────────
 
