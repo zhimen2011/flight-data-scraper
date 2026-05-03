@@ -1,0 +1,6 @@
+ 已记录。下次可以从这里直接继续：
+
+  - 脚本: E:\TEST\test\flight_data_scraper.py
+  - 用法: python flight_data_scraper.py -f <航班号> -d <日期>                                                                            - 已验证: I99806 2026-04-29 四条 CSV 在 E:\TEST\test\flight_csv\
+  - 记忆文件: flight-data-scraper.md 记录了所有 API 接口和参数细节                                                                     
+  关键发现备忘：计划轨迹的 date 参数要传 tKO_TIME_OFF，an 要传机尾号（B-2079 这种），这两个坑已经趟过了。
