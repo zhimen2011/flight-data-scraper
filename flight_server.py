@@ -143,15 +143,21 @@ function switchTab(n){
   if(n===2) refreshReports();
 }
 async function api(path,opt={}){
-  let url='/api'+path;
-  if(opt.method==='POST'){let r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(opt.body||{})});return r.json();}
-  else{let r=await fetch(url);return r.json();}
+  try{
+    let url='/api'+path;
+    let r;
+    if(opt.method==='POST'){r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(opt.body||{})});}
+    else{r=await fetch(url);}
+    if(!r.ok){let e=await r.text();throw new Error(e||r.statusText);}
+    return await r.json();
+  }catch(e){alert('API 错误: '+e.message);return null;}
 }
 // TAB 0
 let pool=[],poolChecks={};
 async function searchFlights(){
   let qs=`?flight=${encodeURIComponent($('sFlight').value)}&aircraft=${encodeURIComponent($('sAircraft').value)}&from=${$('sDateFrom').value}&to=${$('sDateTo').value}`;
   let r=await api('/search'+qs);
+  if(!r){return;}
   if(r.error){alert(r.error);return;}
   let added=0;
   r.results.forEach(fl=>{let k=fl.key;if(!pool.some(p=>p.key===k)){pool.push(fl);poolChecks[k]=true;added++;}});
@@ -182,14 +188,18 @@ async function startScrape(){
   if(!flights.length){alert('请勾选航班');return;}
   setStatus('scrapeStatus','抓取中...');setProgress('scrapeProgress',0);
   let r=await api('/scrape',{method:'POST',body:{flights}});
-  setProgress('scrapeProgress',100);setStatus('scrapeStatus',r.status||'完成');
-  refreshAnalyze();
+  setProgress('scrapeProgress',100);
+  if(!r){setStatus('scrapeStatus','失败');return;}
+  setStatus('scrapeStatus',r.status);
+  if(r.results){alert(r.status+'\n'+r.results.map(x=>x.flight+' '+x.date+': '+(x.ok?'OK '+x.detail:'FAIL '+x.detail)).join('\n'));}
+  setTimeout(refreshAnalyze,500);
 }
 
 // TAB 1
 let analyzeList=[],analyzeChecks={};
 async function refreshAnalyze(){
   let r=await api('/list_csv');
+  if(!r){return;}
   analyzeList=r.files||[];
   analyzeList.forEach(f=>{if(!(f.key in analyzeChecks)) analyzeChecks[f.key]=true;});
   renderAnalyze();setStatus('analyzeStatus','共 '+analyzeList.length+' 个航班数据');
@@ -217,18 +227,23 @@ async function runAnalysis(){
   setStatus('analyzeMsg','分析中...');setProgress('analyzeProgress',0);
   let r=await api('/analyze',{method:'POST',body:{keys,config:cfg}});
   setProgress('analyzeProgress',100);
+  if(!r){setStatus('analyzeMsg','分析失败');return;}
   setStatus('analyzeMsg',r.status||('完成 '+r.count+' 个航班'));
 }
 async function genWordReport(){
   setStatus('analyzeMsg','生成 Word 报告...');setProgress('analyzeProgress',0);
   let r=await api('/gen_word',{method:'POST',body:{}});
-  setProgress('analyzeProgress',100);setStatus('analyzeMsg',r.status||'Word 报告已生成');
+  setProgress('analyzeProgress',100);
+  if(!r){setStatus('analyzeMsg','Word 报告失败');return;}
+  setStatus('analyzeMsg',r.status||'Word 报告已生成');
   refreshReports();
 }
 async function genHtmlReport(){
   setStatus('analyzeMsg','生成 HTML 报告...');setProgress('analyzeProgress',0);
   let r=await api('/gen_html',{method:'POST',body:{}});
-  setProgress('analyzeProgress',100);setStatus('analyzeMsg',r.status||'HTML 报告已生成');
+  setProgress('analyzeProgress',100);
+  if(!r){setStatus('analyzeMsg','HTML 报告失败');return;}
+  setStatus('analyzeMsg',r.status||'HTML 报告已生成');
   refreshReports();
 }
 async function runAll(){await runAnalysis();setTimeout(genWordReport,2000);setTimeout(genHtmlReport,4000);}
@@ -390,8 +405,9 @@ class FlightAPIHandler(BaseHTTPRequestHandler):
         import requests as req
         csv_dir = os.path.join(BASE_DIR, "flight_csv")
         os.makedirs(csv_dir, exist_ok=True)
-        done = 0
+        results = []
         for fl_info in flights:
+            item_status = {"flight": fl_info.get("flight","?"), "date": fl_info.get("date","?"), "ok": False, "detail": ""}
             try:
                 fid = fl_info.get("flightId", "")
                 fn = fl_info.get("flight", "")
@@ -404,23 +420,38 @@ class FlightAPIHandler(BaseHTTPRequestHandler):
                 fdate = tko[:10] if tko else fl_info.get("date", "")
 
                 prefix = os.path.join(csv_dir, f"{fn}_{fdate}")
+                details = []
 
                 plan = get_flight_plan_points(fid, ac, dep, arr, tko_off or tko)
-                if plan:
+                if plan and len(plan) > 0:
                     save_csv(plan, f"{prefix}_plan_track.csv")
                     save_csv(plan, f"{prefix}_plan_profile.csv",
                             ["name", "dist", "alt", "ful", "time", "lat", "lon"])
+                    details.append(f"plan={len(plan)}pts")
+                else:
+                    details.append("plan=empty")
+
                 actual = get_flight_his_pos(fid, tko, des)
-                if actual:
-                    if isinstance(actual, dict):
-                        actual = actual.get("data", actual)
-                    save_csv(actual, f"{prefix}_actual_track.csv")
-                    save_csv(actual, f"{prefix}_actual_profile.csv",
+                actual_data = actual
+                if isinstance(actual, dict):
+                    actual_data = actual.get("data", [])
+                if actual_data and len(actual_data) > 0:
+                    save_csv(actual_data, f"{prefix}_actual_track.csv")
+                    save_csv(actual_data, f"{prefix}_actual_profile.csv",
                             ["gateway_time", "alt", "fob", "dis", "lat", "lon", "posPointName", "sAlt", "type"])
-                done += 1
+                    details.append(f"actual={len(actual_data)}pts")
+                else:
+                    details.append("actual=empty")
+
+                item_status["ok"] = True
+                item_status["detail"] = ", ".join(details)
             except Exception as e:
-                print(f"  scrape error {fl_info.get('flight','?')}: {e}")
-        self._send_json({"status": f"已完成 {done} 个航班"})
+                item_status["detail"] = str(e)[:100]
+            results.append(item_status)
+
+        ok_count = sum(1 for r in results if r["ok"])
+        status_text = f"完成 {ok_count}/{len(results)} 个航班"
+        self._send_json({"status": status_text, "results": results})
 
     def _api_list_csv(self):
         files = []
