@@ -178,10 +178,10 @@ function selPool(mode){
 function removeUnchecked(){pool=pool.filter(p=>poolChecks[p.key]!==false);renderPool();setStatus('poolStatus','结果池（共 '+pool.length+' 条）');}
 async function refreshPool(){renderPool();}
 async function startScrape(){
-  let keys=pool.filter(p=>poolChecks[p.key]!==false).map(p=>p.key);
-  if(!keys.length){alert('请勾选航班');return;}
+  let flights=pool.filter(p=>poolChecks[p.key]!==false);
+  if(!flights.length){alert('请勾选航班');return;}
   setStatus('scrapeStatus','抓取中...');setProgress('scrapeProgress',0);
-  let r=await api('/scrape',{method:'POST',body:{keys}});
+  let r=await api('/scrape',{method:'POST',body:{flights}});
   setProgress('scrapeProgress',100);setStatus('scrapeStatus',r.status||'完成');
   refreshAnalyze();
 }
@@ -368,60 +368,58 @@ class FlightAPIHandler(BaseHTTPRequestHandler):
                     arr = fl.get("dES_FIELD", "")
                     direction = "回程" if ("布鲁塞尔" in arr or "福州" in arr) else "去程"
                     key = f"{tko}_{fid}"
-                    results.append({"key": key, "dir": direction, "date": tko,
-                                    "flight": fn, "ac": ac, "route": f"{dep}→{arr}"})
+                    # Store full flight info for scraping
+                    results.append({
+                        "key": key, "dir": direction, "date": tko,
+                        "flight": fn, "ac": ac, "route": f"{dep}→{arr}",
+                        "flightId": fid, "aircraft": ac,
+                        "tkoTime": fl.get("tKO_TIME", ""),
+                        "desTime": fl.get("dES_TIME", ""),
+                        "tkoTimeOff": fl.get("tKO_TIME_OFF", ""),
+                        "depAirport": dep, "arrAirport": arr,
+                    })
             except Exception as e:
                 print(f"  search error: {e}")
         self._send_json({"results": results})
 
     def _api_scrape(self, body):
-        keys = json.loads(body).get("keys", [])
-        if not keys:
+        flights = json.loads(body).get("flights", [])
+        if not flights:
             self._send_json({"status": "无航班"})
             return
         import requests as req
         csv_dir = os.path.join(BASE_DIR, "flight_csv")
         os.makedirs(csv_dir, exist_ok=True)
         done = 0
-        for key in keys:
-            parts = key.split("_", 1)
-            date_str = parts[0]
-            # Search for full details
+        for fl_info in flights:
             try:
-                r = req.get(f"{SCRAPE_URL}/getFlightListByAN",
-                           params={"fi": key, "staDate": date_str, "endDate": date_str}, timeout=30)
-                flights = r.json()
-                if isinstance(flights, dict):
-                    flights = flights.get("data", [])
-                for fl in flights:
-                    fid = fl.get("fLIGHTID", "")
-                    if not fid:
-                        continue
-                    fn = fl.get("fLIGHTID", key)
-                    tko = fl.get("tKO_TIME", "")
-                    des = fl.get("dES_TIME", "")
-                    ac = fl.get("aIRCRAFT", "")
-                    dep = fl.get("tKO_FIELD", "")
-                    arr = fl.get("dES_FIELD", "")
-                    tko_off = fl.get("tKO_TIME_OFF", "")
-                    fdate = tko[:10] if tko else date_str
-                    prefix = os.path.join(csv_dir, f"{fn}_{fdate}")
+                fid = fl_info.get("flightId", "")
+                fn = fl_info.get("flight", "")
+                ac = fl_info.get("aircraft", "")
+                dep = fl_info.get("depAirport", "")
+                arr = fl_info.get("arrAirport", "")
+                tko = fl_info.get("tkoTime", "")
+                des = fl_info.get("desTime", "")
+                tko_off = fl_info.get("tkoTimeOff", "")
+                fdate = tko[:10] if tko else fl_info.get("date", "")
 
-                    plan = get_flight_plan_points(fid, ac, dep, arr, tko_off or tko)
-                    if plan:
-                        save_csv(plan, f"{prefix}_plan_track.csv")
-                        save_csv(plan, f"{prefix}_plan_profile.csv",
-                                ["name", "dist", "alt", "ful", "time", "lat", "lon"])
-                    actual = get_flight_his_pos(fid, tko, des)
-                    if actual:
-                        if isinstance(actual, dict):
-                            actual = actual.get("data", actual)
-                        save_csv(actual, f"{prefix}_actual_track.csv")
-                        save_csv(actual, f"{prefix}_actual_profile.csv",
-                                ["gateway_time", "alt", "fob", "dis", "lat", "lon", "posPointName", "sAlt", "type"])
+                prefix = os.path.join(csv_dir, f"{fn}_{fdate}")
+
+                plan = get_flight_plan_points(fid, ac, dep, arr, tko_off or tko)
+                if plan:
+                    save_csv(plan, f"{prefix}_plan_track.csv")
+                    save_csv(plan, f"{prefix}_plan_profile.csv",
+                            ["name", "dist", "alt", "ful", "time", "lat", "lon"])
+                actual = get_flight_his_pos(fid, tko, des)
+                if actual:
+                    if isinstance(actual, dict):
+                        actual = actual.get("data", actual)
+                    save_csv(actual, f"{prefix}_actual_track.csv")
+                    save_csv(actual, f"{prefix}_actual_profile.csv",
+                            ["gateway_time", "alt", "fob", "dis", "lat", "lon", "posPointName", "sAlt", "type"])
+                done += 1
             except Exception as e:
-                print(f"  scrape error {key}: {e}")
-            done += 1
+                print(f"  scrape error {fl_info.get('flight','?')}: {e}")
         self._send_json({"status": f"已完成 {done} 个航班"})
 
     def _api_list_csv(self):

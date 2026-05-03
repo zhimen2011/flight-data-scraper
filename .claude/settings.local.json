@@ -45,7 +45,8 @@
       "Bash(git add *)",
       "Bash(git commit *)",
       "Bash(git rm *)",
-      "Bash(taskkill /F /IM python.exe)"
+      "Bash(taskkill /F /IM python.exe)",
+      "Bash(cat C:\\\\\\\\Users\\\\\\\\78590\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\E--TEST-flight-data-scraper\\\\\\\\161f247e-2920-490b-b403-2595c59d3c89\\\\\\\\tasks\\\\\\\\bj426i55j.output)"
     ]
   }
 }
