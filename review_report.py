@@ -48,6 +48,52 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 REPORTS_DIR = os.path.join(BASE_DIR, "reports")
 CONFIG_PATH = os.path.join(BASE_DIR, "deepseek_config.json")
 
+# ─── Region Normalization ─────────────────────────────────────────────────────
+# Map individual countries / small regions to parent airspace regions
+# as used in the human-written reports (蒙古, 俄罗斯, 欧洲, 国内段, etc.)
+
+REGION_NORMALIZE = {
+    # Keep these as-is
+    "国内段": "国内段",
+    "蒙古": "蒙古",
+    "俄罗斯": "俄罗斯",
+    "哈萨克斯坦": "哈萨克斯坦",
+    "海上": "海上",
+    # Map individual European/Arabian countries to "欧洲"
+    "阿塞拜疆": "欧洲",
+    "格鲁吉亚": "欧洲",
+    "土耳其": "欧洲",
+    "希腊": "欧洲",
+    "波兰": "欧洲",
+    "德国": "欧洲",
+    "比利时": "欧洲",
+    "白俄罗斯": "欧洲",
+    "乌克兰": "欧洲",
+    "罗马尼亚": "欧洲",
+    "保加利亚": "欧洲",
+    # Map individual Central Asian to their own or merge
+    "土库曼斯坦": "中亚",
+    "乌兹别克斯坦": "中亚",
+    "吉尔吉斯斯坦": "中亚",
+    "塔吉克斯坦": "中亚",
+}
+
+
+def normalize_region(region_raw):
+    """Map a country name or small region to parent airspace region."""
+    if region_raw in REGION_NORMALIZE:
+        return REGION_NORMALIZE[region_raw]
+    # Check if it's already a known parent region
+    if region_raw in ("欧洲", "国内段", "蒙古", "俄罗斯", "哈萨克斯坦", "海上", "中亚"):
+        return region_raw
+    # Fallback: try ISO-based matching
+    if region_raw.startswith("其他("):
+        iso = region_raw[3:-1]
+        for name, target in REGION_NORMALIZE.items():
+            if iso.upper() == name[:2].upper():
+                return target
+    return region_raw  # keep as-is if unknown
+
 # ─── DeepSeek API Client ─────────────────────────────────────────────────────
 
 def load_api_config():
@@ -105,45 +151,97 @@ def build_system_prompt():
 
 
 def build_user_prompt(analysis, config):
-    """Build the user prompt with flight data."""
+    """Build the user prompt with flight data, normalized regions, waypoint detail."""
+
+    # Helper: format altitude with FL standard
+    def fmt_alt(alt_ft, region):
+        from generate_docx_report import format_altitude
+        return format_altitude(alt_ft, region)
 
     flights_info = []
     for key, result in analysis.get("flights", {}).items():
-        flights_info.append(f"- {key}")
         meta = result.get("metadata", {})
-        flights_info.append(f"  总航程: {meta.get('total_distance_nm', '?')}nm, "
-                           f"计划航路点: {meta.get('plan_waypoints_count', '?')}, "
-                           f"实际轨迹点: {meta.get('actual_points_count', '?')}")
+        plan_wps = result.get("plan_waypoints", [])
+        dep = plan_wps[0]["name"] if plan_wps else "?"
+        arr = plan_wps[-1]["name"] if plan_wps else "?"
+        flights_info.append(
+            f"- {key}: {dep}→{arr}, 航程{meta.get('total_distance_nm', '?')}nm, "
+            f"计划航路点{meta.get('plan_waypoints_count', '?')}个, "
+            f"实际轨迹点{meta.get('actual_points_count', '?')}个"
+        )
 
+    # Region statistics with normalized region names
     region_stats_text = []
     for key, result in analysis.get("flights", {}).items():
         region_stats_text.append(f"\n### {key}")
         for rs in result.get("region_stats", []):
+            reg = normalize_region(rs["region"])
             region_stats_text.append(
-                f"  {rs['region']}: 偏差范围 {rs['max_alt_dev_below']}~{rs['max_alt_dev_above']}ft, "
-                f"持续 {rs['duration_nm']}nm"
+                f"  {reg}: 偏差{rs['max_alt_dev_below']}~{rs['max_alt_dev_above']}ft, "
+                f"持续{rs['duration_nm']}nm"
             )
-        # Warnings
+        # Warnings with normalized regions
         warnings = result.get("warnings", [])
         if warnings:
             region_stats_text.append("  显著事件:")
-            for w in warnings[:8]:
+            for w in warnings[:12]:
+                reg = normalize_region(w["region"])
                 region_stats_text.append(
-                    f"    {w['region']} {w['direction']} "
-                    f"计划{w['plan_alt']:.0f}ft→实际{w['actual_alt']:.0f}ft "
+                    f"    {reg} {w['direction']} "
+                    f"计划{fmt_alt(w['plan_alt'], reg)}→实际{fmt_alt(w['actual_alt'], reg)} "
                     f"持续{w['duration_nm']}nm"
                 )
 
+    # Waypoint-level detail for China domestic segment
+    waypoint_detail = []
+    for key, result in analysis.get("flights", {}).items():
+        wp_alts = []
+        plan_wps = result.get("plan_waypoints", [])
+        dev_data = result.get("deviation_data", [])
+        if not plan_wps or not dev_data:
+            continue
+
+        # Find domestic segment waypoints and their deviation
+        domestic_wps = {}
+        for d in dev_data:
+            if d.get("region") == "国内段" and d.get("is_cruise"):
+                # Find nearest plan waypoint
+                nearest = min(plan_wps, key=lambda w: abs(w["dist"] - d["dis"]))
+                name = nearest["name"]
+                if name not in domestic_wps:
+                    domestic_wps[name] = {"plan_alt": nearest["alt"], "actual_alts": [], "dists": []}
+                domestic_wps[name]["actual_alts"].append(d["alt"])
+                domestic_wps[name]["dists"].append(d["dis"])
+
+        if domestic_wps:
+            wp_detail_lines = [f"\n### {key} 国内段航路点偏差"]
+            for wp_name in sorted(domestic_wps, key=lambda n: domestic_wps[n]["dists"][0]):
+                data = domestic_wps[wp_name]
+                median_actual = sorted(data["actual_alts"])[len(data["actual_alts"]) // 2]
+                dev = median_actual - data["plan_alt"]
+                if abs(dev) > 500:  # Only show significant
+                    wp_detail_lines.append(
+                        f"  {wp_name}: 计划{fmt_alt(data['plan_alt'], '国内段')}→"
+                        f"实际{fmt_alt(median_actual, '国内段')}, 偏差{dev:.0f}ft"
+                    )
+            if len(wp_detail_lines) > 1:
+                waypoint_detail.extend(wp_detail_lines)
+
+    # Descent analysis
     descent_text = []
     for key, result in analysis.get("flights", {}).items():
         da = result.get("descent_analysis")
         if da and da.get("is_premature"):
+            wps = da.get("between_waypoints", [])
             descent_text.append(
                 f"\n### {key}\n"
-                f"  计划下降点: {da['plan_tod_wp']}({da['plan_tod_dist']}nm, {da['plan_tod_alt']:.0f}ft)\n"
+                f"  计划下降点: {da['plan_tod_wp']}({da['plan_tod_dist']}nm, "
+                f"{fmt_alt(da['plan_tod_alt'], da.get('region', ''))})\n"
                 f"  实际开始下降: {da['actual_descent_start_wp']}({da['actual_descent_start_dist']}nm)\n"
                 f"  提前量: {da['descent_diff_nm']}nm\n"
-                f"  途经航路点: {'→'.join(da.get('between_waypoints', []))}"
+                f"  计划下降途经航路点: {'→'.join(wps)}\n"
+                f"  建议阶梯下降段: {da['actual_descent_start_wp']}→{da['plan_tod_wp']} "
+                f"({'→'.join(wps[:5])})"
             )
 
     prompt = textwrap.dedent(f"""\
@@ -157,8 +255,11 @@ def build_user_prompt(analysis, config):
     ## 航班概况
     {chr(10).join(flights_info)}
 
-    ## 区域偏差统计
+    ## 区域偏差统计（国际段按大区域：欧洲、俄罗斯、蒙古、哈萨克斯坦）
     {chr(10).join(region_stats_text)}
+
+    ## 国内段航路点偏差（仅列出偏差>500ft的）
+    {chr(10).join(waypoint_detail) if waypoint_detail else '（无显著航路点级偏差）'}
 
     ## 下降剖面分析
     {''.join(descent_text) if descent_text else '（未检测到提前下降）'}
@@ -171,16 +272,25 @@ def build_user_prompt(analysis, config):
     ## 分析依据
     （简要说明数据来源和样本量）
 
-    ## 去程/回程航班分析（根据数据方向分组）
-    （每段说明偏差统计、发生率、结论与优化建议）
-    - 只列出发生率>=50%的区域
-    - 中国区域使用米制高度层(如10700米(FL351))
+    ## 去程航班分析（按大区域：欧洲、俄罗斯、蒙古、哈萨克斯坦等）
+    具体偏差统计如下：
+    - 蒙古区域高度偏低（FLxxx）：在N班中出现X次，占比XX.X%。
+    - 俄罗斯部分区域高度偏低（FLxxx）：...
+    - 欧洲区域高度偏低（FLxxx）：...
+    （只列出发生率>=50%的区域，国际段使用FL格式）
 
-    ## 下降剖面特征（如有提前下降）
-    （定位到具体航路点，给出阶梯下降建议）
+    ## 国内段航路点偏差
+    （按航路点列出偏差，如"XXX点 计划FLxxx→实际FLxxx，偏低X个高度层"）
+    （国内段使用中国米制标准：xxxx米(FLxxx)）
 
-    ## 优化建议总结
-    （汇总CFP修改建议，具体到高度层数字和航路点）
+    ## 结论与优化建议
+    （去程结论 + 具体CFP修改建议）
+
+    ## 下降剖面特征
+    （下降起始航路点 + 阶梯下降方案）
+
+    ## 统计表
+    （列出每班航班的日期、航班号、始发站、到达站、偏差备注）
 
     请直接输出报告内容，不要输出其他说明。
     """)
@@ -308,6 +418,7 @@ def main():
     parser.add_argument("--prompt", help="使用自定义 prompt 文件")
     # Output
     parser.add_argument("--output", "-o", default=None, help="输出文件路径")
+    parser.add_argument("--reference", help="参考报告 .docx 文件（学习风格）")
     parser.add_argument("--finalize", action="store_true", help="将 draft markdown 转为最终 docx")
     parser.add_argument("--draft", help="已审核的 draft markdown 文件路径")
 
@@ -368,6 +479,39 @@ def main():
 
     # Step 4: Build prompt
     system_prompt = build_system_prompt()
+
+    # Inject reference report style if provided
+    if args.reference:
+        ref_text = ""
+        if args.reference.endswith('.docx'):
+            try:
+                doc_ref = Document(args.reference)
+                ref_text = "\n\n".join(p.text for p in doc_ref.paragraphs if p.text.strip())
+            except Exception as e:
+                print(f"  WARNING: 无法读取参考报告: {e}")
+        else:
+            with open(args.reference, "r", encoding="utf-8") as f:
+                ref_text = f.read()
+
+        if ref_text:
+            system_prompt += textwrap.dedent(f"""
+
+                ## 参考报告格式（请严格模仿以下报告的写作风格和术语习惯）
+
+                以下是之前人工撰写的同类航线分析报告，请仔细分析并模仿其：
+                - 术语习惯（如"蒙古区域"、"国内下降剖面特征"）
+                - 句式结构（先定量统计，后定性结论）
+                - 高度层表述（国际ICAO用FLxxx，中国CAAC用xxxx米(FLxxx)）
+                - 表格格式
+                - 结论与建议的措辞
+
+                === 参考报告开始 ===
+                {ref_text[:8000]}
+                === 参考报告结束 ===
+
+                请在保持数据分析准确的前提下，严格模仿上述报告的写作风格生成新的报告。
+                """)
+
     user_prompt = build_user_prompt(analysis, {
         "route_name": args.route or "未指定",
         "date_range": getattr(args, 'date_range', ''),
