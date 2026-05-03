@@ -150,7 +150,7 @@ async function api(path,opt={}){
 // TAB 0
 let pool=[],poolChecks={};
 async function searchFlights(){
-  let qs=`?flight=${encodeURIComponent(sFlight.value)}&aircraft=${encodeURIComponent(sAircraft.value)}&from=${sDateFrom.value}&to=${sDateTo.value}`;
+  let qs=`?flight=${encodeURIComponent($('sFlight').value)}&aircraft=${encodeURIComponent($('sAircraft').value)}&from=${$('sDateFrom').value}&to=${$('sDateTo').value}`;
   let r=await api('/search'+qs);
   if(r.error){alert(r.error);return;}
   let added=0;
@@ -204,16 +204,16 @@ function renderAnalyze(){
 }
 function toggleAnalyze(k){analyzeChecks[k]=!analyzeChecks[k];renderAnalyze();}
 function selAnalyze(state){analyzeList.forEach(f=>analyzeChecks[f.key]=state);renderAnalyze();}
-function updateCfg(){document.getElementById('aAltVal').textContent=document.getElementById('aAlt').value;document.getElementById('aDurVal').textContent=document.getElementById('aDur').value;}
+function updateCfg(){$('aAltVal').textContent=$('aAlt').value;$('aDurVal').textContent=$('aDur').value;}
 async function saveConfig(){
-  let cfg={min_alt_deviation_ft:parseInt(aAlt.value),min_duration_nm:parseInt(aDur.value)};
+  let cfg={min_alt_deviation_ft:parseInt($('aAlt').value),min_duration_nm:parseInt($('aDur').value)};
   await api('/save_config',{method:'POST',body:cfg});
   alert('配置已保存');
 }
 async function runAnalysis(){
   let keys=analyzeList.filter(f=>analyzeChecks[f.key]!==false).map(f=>f.key);
   if(!keys.length){alert('请勾选航班');return;}
-  let cfg={min_alt_deviation_ft:parseInt(aAlt.value),min_duration_nm:parseInt(aDur.value)};
+  let cfg={min_alt_deviation_ft:parseInt($('aAlt').value),min_duration_nm:parseInt($('aDur').value)};
   setStatus('analyzeMsg','分析中...');setProgress('analyzeProgress',0);
   let r=await api('/analyze',{method:'POST',body:{keys,config:cfg}});
   setProgress('analyzeProgress',100);
@@ -246,12 +246,7 @@ function openReportsFolder(){window.open('/reports/');}
 // Utils
 function setStatus(id,txt){document.getElementById(id).textContent=txt;}
 function setProgress(id,pct){document.getElementById(id).style.width=pct+'%';}
-let sFlight=()=>document.getElementById('sFlight');
-let sAircraft=()=>document.getElementById('sAircraft');
-let sDateFrom=()=>document.getElementById('sDateFrom');
-let sDateTo=()=>document.getElementById('sDateTo');
-let aAlt=()=>document.getElementById('aAlt');
-let aDur=()=>document.getElementById('aDur');
+function $(id){return document.getElementById(id);}
 
 // Init
 refreshPool();refreshAnalyze();refreshReports();
