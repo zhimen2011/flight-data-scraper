@@ -58,7 +58,10 @@
       "Bash(taskkill /F /PID 7964)",
       "Bash(wmic process *)",
       "Bash(curl -s http://localhost:8765/)",
-      "Bash(curl -s http://localhost:8765/api/load_api_cfg)"
+      "Bash(curl -s http://localhost:8765/api/load_api_cfg)",
+      "Bash(git -C \"E:/TEST/flight-data-scraper\" log --oneline -3)",
+      "Bash(git -C \"E:/TEST/flight-data-scraper\" show --name-only --oneline b9a43d9)",
+      "Bash(git checkout *)"
     ]
   }
 }

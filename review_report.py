@@ -291,15 +291,29 @@ def generate_integrated_html(analysis, ai_report_md, config, output_path):
     with open(template_path, "r", encoding="utf-8") as f:
         template = f.read()
 
-    # Build per-flight data for JS
+    # Build per-flight data for JS (include raw country names for map display)
     all_days = {}
     for key, result in sorted(analysis.get("flights", {}).items()):
         parts = key.rsplit("_", 1)
         date_str = parts[1] if len(parts) > 1 else key
+        # Simplify deviation data - keep country field for map labels
+        slim_dev = []
+        for d in result.get("deviation_data", []):
+            slim_dev.append({
+                "t": d.get("t",""), "lat": d.get("lat",0), "lon": d.get("lon",0),
+                "alt": d.get("alt",0), "dis": d.get("dis",0),
+                "plan_alt": d.get("plan_alt",0),
+                "plan_lat": d.get("plan_lat",0), "plan_lon": d.get("plan_lon",0),
+                "xt": d.get("cross_track_nm",0) if "cross_track_nm" in d else d.get("xt",0),
+                "alt_dev": d.get("alt_dev_ft",0) if "alt_dev_ft" in d else d.get("alt_dev",0),
+                "fuel_dev": d.get("fuel_dev_lbs",0) if "fuel_dev_lbs" in d else d.get("fuel_dev",0),
+                "region": d.get("region",""), "country": d.get("country",""),
+                "is_cruise": d.get("is_cruise",False),
+            })
         all_days[date_str] = {
             "metadata": result.get("metadata", {}),
             "plan_waypoints": result.get("plan_waypoints", []),
-            "deviation_data": result.get("deviation_data", []),
+            "deviation_data": slim_dev,
             "warnings": result.get("warnings", []),
             "descent_analysis": result.get("descent_analysis"),
         }

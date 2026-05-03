@@ -105,13 +105,15 @@ select:focus{outline:none;border-color:#e94560;}
 <div class="tab-content" id="tab1">
   <!-- API Key -->
   <div class="section-box">
-    <h3 onclick="toggleSection('apiSection')">🔑 API 配置 <span id="apiStatus" class="dot-unknown">● 未检测</span></h3>
-    <div id="apiSection">
+    <h3>🔑 API 配置 <span id="apiStatus" class="dot-unknown">● 未检测</span>
+      <button class="btn-secondary" onclick="showApiEditor()" style="font-size:10px;padding:2px 8px;margin-left:10px;">编辑</button>
+    </h3>
+    <div id="apiSection" style="display:none;">
       <div class="config-row">
-        <span>Key:</span><input id="apiKey" style="width:300px;" placeholder="sk-...">
+        <span>Key:</span><input id="apiKey" type="password" style="width:300px;" placeholder="sk-...">
+        <button class="btn-secondary" onclick="toggleApiVisibility()" style="font-size:10px;padding:2px 6px;">👁</button>
         <span>Model:</span><input id="apiModel" value="deepseek-v4-pro" style="width:140px;">
-        <button class="btn-secondary" onclick="testApiKey()">测试连接</button>
-        <button class="btn-secondary" onclick="saveApiKey()">保存</button>
+        <button class="btn-primary" onclick="testApiKey()">测试并保存</button>
       </div>
     </div>
   </div>
@@ -257,9 +259,11 @@ async function startScrape(){
 }
 
 // ── TAB 1: API Config ──
+function showApiEditor(){$('apiSection').style.display='block';}
+function toggleApiVisibility(){let i=$('apiKey');i.type=i.type==='password'?'text':'password';}
 async function loadApiCfg(){
   let r=await api('/load_api_cfg');
-  if(!r)return;$('apiKey').value=r.api_key||'';$('apiModel').value=r.model||'deepseek-v4-pro';
+  if(!r)return;$('apiModel').value=r.model||'deepseek-v4-pro';
   if(r.status==='ok'){$('apiStatus').innerHTML='<span class="dot-ok">● 正常</span>';}
   else if(r.status==='unset'){$('apiStatus').innerHTML='<span class="dot-unknown">● 未配置</span>';}
   else{$('apiStatus').innerHTML='<span class="dot-fail">● '+r.status+'</span>';}
@@ -268,20 +272,22 @@ async function testApiKey(){
   $('apiStatus').innerHTML='<span class="dot-unknown">● 检测中...</span>';
   let r=await api('/test_key',{method:'POST',body:{key:$('apiKey').value,model:$('apiModel').value}});
   if(!r){$('apiStatus').innerHTML='<span class="dot-fail">● 网络错误</span>';return;}
-  if(r.ok){$('apiStatus').innerHTML='<span class="dot-ok">● 正常</span>';alert('API Key 有效');}
-  else{$('apiStatus').innerHTML='<span class="dot-fail">● 失效</span>';alert('API Key 无效: '+r.error);}
-}
-async function saveApiKey(){
-  let r=await api('/save_key',{method:'POST',body:{key:$('apiKey').value,model:$('apiModel').value}});
-  if(r)alert('已保存');loadApiCfg();
+  if(r.ok){
+    $('apiStatus').innerHTML='<span class="dot-ok">● 正常</span>';
+    // Save and hide
+    await api('/save_key',{method:'POST',body:{key:$('apiKey').value,model:$('apiModel').value}});
+    $('apiKey').value='';$('apiSection').style.display='none';
+    alert('API Key 有效，已保存');
+  }else{$('apiStatus').innerHTML='<span class="dot-fail">● 失效</span>';alert('API Key 无效: '+r.error);}
 }
 
 // ── TAB 1: Analyze ──
 let analyzeList=[],analyzeChecks={};
 async function refreshAnalyze(){
   let r=await api('/list_csv');if(!r)return;
-  analyzeList=r.files||[];analyzeList.forEach(f=>{if(!(f.key in analyzeChecks))analyzeChecks[f.key]=true;});
-  renderAnalyze();setStatus('analyzeStatus','共 '+analyzeList.length+' 个航班数据');
+  analyzeList=r.files||[];
+  analyzeList.forEach(f=>{if(!(f.key in analyzeChecks))analyzeChecks[f.key]=false;});
+  renderAnalyze();setStatus('analyzeStatus','共 '+analyzeList.length+' 个航班数据（请勾选要分析的）');
 }
 function renderAnalyze(){
   let h='<table><tr><th>✓</th><th>日期</th><th>航班号</th><th>状态</th></tr>';
