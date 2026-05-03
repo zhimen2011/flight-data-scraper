@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+deepseek_config.json
+reports/
+*.tmp
+~$*.docx
