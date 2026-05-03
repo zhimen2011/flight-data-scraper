@@ -418,7 +418,8 @@ def main():
     parser.add_argument("--prompt", help="使用自定义 prompt 文件")
     # Output
     parser.add_argument("--output", "-o", default=None, help="输出文件路径")
-    parser.add_argument("--reference", help="参考报告 .docx 文件（学习风格）")
+    parser.add_argument("--reference", help="参考主报告 .docx 文件（学习风格）")
+    parser.add_argument("--appendix", help="参考附件 .docx 文件（学习附录结构）")
     parser.add_argument("--finalize", action="store_true", help="将 draft markdown 转为最终 docx")
     parser.add_argument("--draft", help="已审核的 draft markdown 文件路径")
 
@@ -481,36 +482,64 @@ def main():
     system_prompt = build_system_prompt()
 
     # Inject reference report style if provided
-    if args.reference:
-        ref_text = ""
-        if args.reference.endswith('.docx'):
+    def _read_docx_text(path):
+        if not path or not os.path.exists(path):
+            return ""
+        if path.endswith('.docx'):
             try:
-                doc_ref = Document(args.reference)
-                ref_text = "\n\n".join(p.text for p in doc_ref.paragraphs if p.text.strip())
+                doc = Document(path)
+                # Extract paragraphs
+                paras = [p.text for p in doc.paragraphs if p.text.strip()]
+                # Also extract tables
+                for table in doc.tables:
+                    for row in table.rows:
+                        row_text = " | ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                        if row_text:
+                            paras.append(row_text)
+                return "\n\n".join(paras)
             except Exception as e:
-                print(f"  WARNING: 无法读取参考报告: {e}")
+                print(f"  WARNING: 无法读取 {path}: {e}")
+                return ""
         else:
-            with open(args.reference, "r", encoding="utf-8") as f:
-                ref_text = f.read()
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read()
 
-        if ref_text:
-            system_prompt += textwrap.dedent(f"""
+    ref_text = _read_docx_text(args.reference) if args.reference else ""
+    appendix_text = _read_docx_text(args.appendix) if args.appendix else ""
 
-                ## 参考报告格式（请严格模仿以下报告的写作风格和术语习惯）
+    if ref_text:
+        appendix_note = ""
+        if appendix_text:
+            appendix_note = textwrap.dedent(f"""
 
-                以下是之前人工撰写的同类航线分析报告，请仔细分析并模仿其：
-                - 术语习惯（如"蒙古区域"、"国内下降剖面特征"）
-                - 句式结构（先定量统计，后定性结论）
-                - 高度层表述（国际ICAO用FLxxx，中国CAAC用xxxx米(FLxxx)）
-                - 表格格式
-                - 结论与建议的措辞
+                ## 附件结构参考
 
-                === 参考报告开始 ===
-                {ref_text[:8000]}
-                === 参考报告结束 ===
+                以下是参考报告的附件格式。附件中每个航班对应一张高度剖面对比图，
+                附带简短的偏差描述文字。请模仿此附件的组织结构。
 
-                请在保持数据分析准确的前提下，严格模仿上述报告的写作风格生成新的报告。
+                === 附件内容开始 ===
+                {appendix_text[:4000]}
+                === 附件内容结束 ===
                 """)
+
+        system_prompt += textwrap.dedent(f"""
+
+            ## 参考报告格式（请严格模仿以下报告的写作风格和术语习惯）
+
+            以下是之前人工撰写的同类航线分析报告，请仔细分析并模仿其：
+            - 术语习惯（如"蒙古区域"、"国内下降剖面特征"）
+            - 句式结构（先定量统计，后定性结论）
+            - 高度层表述（国际ICAO用FLxxx，中国CAAC用xxxx米(FLxxx)）
+            - 表格格式
+            - 结论与建议的措辞
+
+            === 参考主报告开始 ===
+            {ref_text[:8000]}
+            === 参考主报告结束 ===
+            {appendix_note}
+
+            请在保持数据分析准确的前提下，严格模仿上述报告的写作风格生成新的报告。
+            """)
 
     user_prompt = build_user_prompt(analysis, {
         "route_name": args.route or "未指定",
