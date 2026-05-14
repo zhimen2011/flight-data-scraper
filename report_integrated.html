@@ -40,6 +40,11 @@ body{font-family:"Microsoft YaHei","SimHei",sans-serif;background:#1a1a2e;color:
 .text-box th{background:#0f3460;color:#e94560;}
 .text-box tr:hover td{background:#1a1a3e;}
 .danger{color:#ff4444;}
+.country-label{color:#6b5b24;font-weight:bold;font-size:15px;text-shadow:0 1px 2px #fff,0 0 3px #fff;white-space:nowrap;}
+.map-legend{background:rgba(22,33,62,0.92);color:#ddd;padding:7px 9px;border-radius:4px;font-size:11px;box-shadow:0 1px 5px rgba(0,0,0,0.3);}
+.map-legend div{display:flex;align-items:center;gap:6px;margin:3px 0;}
+.legend-line{width:24px;height:0;border-top:3px solid #fff;display:inline-block;}
+.legend-line.dashed{border-top-style:dashed;}
 </style>
 </head>
 <body>
@@ -75,8 +80,12 @@ body{font-family:"Microsoft YaHei","SimHei",sans-serif;background:#1a1a2e;color:
 <script>
 const ALL_DAYS = {{ALL_DAYS_JSON}};
 const REPORT_MD = {{REPORT_MD_JSON}};
-const DAY_COLORS = ['#e6194b','#3cb44b','#ffe119','#4363d8','#f58231','#911eb4','#42d4f4','#f032e6','#bfef45','#fabed4',
-  '#469990','#dcbeff','#9A6324','#fffac8','#800000','#aaffc3','#808000','#ffd8b1','#000075','#a9a9a9'];
+const DAY_COLORS = ['#d1495b','#2a9d8f','#e9c46a','#457b9d','#8d5a97','#6a994e','#f4a261','#118ab2','#ef476f','#7f4f24',
+  '#4d908e','#577590','#bc6c25','#43aa8b','#9d4edd','#f77f00','#778da9','#70a288','#b56576','#6c757d'];
+const PLAN_COLOR = '#f6c343';
+const ACTUAL_COLOR = '#38bdf8';
+const EXCEED_COLOR = '#f43f5e';
+const HIGH_EXCEED_COLOR = '#111111';
 
 let altThreshold = {{H_THRESHOLD}};
 let cruiseOnly = true;
@@ -86,9 +95,20 @@ const map = L.map('map').setView([45,60],4);
 L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x={x}&y={y}&z={z}',{
   subdomains:'1234', maxZoom:13, attribution:'高德地图'
 }).addTo(map);
+const routeLayer = L.layerGroup().addTo(map);
+const focusLayer = L.layerGroup().addTo(map);
+const legendControl = L.control({position:'bottomleft'});
+legendControl.onAdd = function(){
+  const div = L.DomUtil.create('div','map-legend');
+  div.id = 'mapLegend';
+  return div;
+};
+legendControl.addTo(map);
 
 const chartAlt = echarts.init(document.getElementById('chartAlt'));
 const chartXT = echarts.init(document.getElementById('chartXT'));
+let chartFocusIndex = {};
+let chartSeriesLookup = {alt:{}, xt:{}};
 
 // Build flight list
 function buildFlightList(){
@@ -114,111 +134,302 @@ function getSelectedKeys(){
 
 function refreshAll(){ updateMap(); updateCharts(); updateExceed(); }
 
-function updateMap(){
-  map.eachLayer(l => { if(!l._url) map.removeLayer(l); });
-  const selected = getSelectedKeys();
-  if(selected.length === 0) return;
+function fmtFt(value){
+  return Number.isFinite(value) ? value.toFixed(0)+' ft' : '?';
+}
 
-  // Plan route (first selected day)
-  const first = ALL_DAYS[selected[0]];
-  if(first && first.plan_waypoints){
-    L.polyline(first.plan_waypoints.map(w=>[w.lat,w.lon]),{color:'#3388ff',weight:2,opacity:0.8,dashArray:'6,4'}).addTo(map);
-    first.plan_waypoints.filter(w=>w.alt>100).forEach(w=>{
-      L.circleMarker([w.lat,w.lon],{radius:2,color:'#3388ff',fillOpacity:0.5}).bindTooltip(w.name).addTo(map);
-    });
+function nearestPoint(points, dist){
+  if(!points||points.length===0) return null;
+  const pointDist = p => Number(p.dis ?? p.dist ?? 0);
+  return points.reduce((best,p)=>Math.abs(pointDist(p)-dist)<Math.abs(pointDist(best)-dist)?p:best, points[0]);
+}
+
+function nearestPointIndex(points, dist){
+  if(!points||points.length===0) return -1;
+  let bestIdx = 0;
+  const pointDist = p => Number(p.dis ?? p.dist ?? 0);
+  let bestDelta = Math.abs(pointDist(points[0])-dist);
+  for(let i=1;i<points.length;i++){
+    const delta = Math.abs(pointDist(points[i])-dist);
+    if(delta<bestDelta){bestDelta=delta;bestIdx=i;}
   }
+  return bestIdx;
+}
 
-  // Actual tracks
+function nearestLatLonPoint(points, latlng){
+  if(!points||points.length===0||!latlng) return null;
+  const latScale = Math.cos((latlng.lat || 0) * Math.PI / 180);
+  let best = points[0];
+  let bestScore = Infinity;
+  points.forEach(p=>{
+    const dLat = (Number(p.lat || 0) - latlng.lat);
+    const dLon = (Number(p.lon || 0) - latlng.lng) * latScale;
+    const score = dLat*dLat + dLon*dLon;
+    if(score < bestScore){bestScore = score; best = p;}
+  });
+  return best;
+}
+
+function interpolatePlan(plan, dist){
+  if(!plan||plan.length===0) return null;
+  for(let i=0;i<plan.length-1;i++){
+    const a = plan[i], b = plan[i+1];
+    if((a.dist<=dist&&dist<=b.dist)||(b.dist<=dist&&dist<=a.dist)){
+      const span = b.dist-a.dist;
+      const f = Math.abs(span)<1e-6 ? 0 : (dist-a.dist)/span;
+      return {
+        dist,
+        alt:a.alt+(b.alt-a.alt)*f,
+        lat:a.lat+(b.lat-a.lat)*f,
+        lon:a.lon+(b.lon-a.lon)*f
+      };
+    }
+  }
+  const nearest = nearestPoint(plan, dist);
+  return nearest ? {dist:nearest.dist,alt:nearest.alt,lat:nearest.lat,lon:nearest.lon} : null;
+}
+
+function updateMapLegend(singleMode){
+  const el = document.getElementById('mapLegend');
+  if(!el) return;
+  if(singleMode){
+    el.innerHTML = `<div><span class="legend-line dashed" style="border-color:${PLAN_COLOR}"></span>计划轨迹</div>`
+      + `<div><span class="legend-line" style="border-color:${ACTUAL_COLOR}"></span>实际轨迹</div>`
+      + `<div><span class="legend-line" style="border-color:${EXCEED_COLOR}"></span>低于计划</div>`
+      + `<div><span class="legend-line" style="border-color:${HIGH_EXCEED_COLOR}"></span>高于计划</div>`;
+  }else{
+    el.innerHTML = '<div><span class="legend-line" style="border-color:#ddd"></span>颜色代表航班</div>'
+      + '<div><span class="legend-line dashed" style="border-color:#ddd"></span>计划轨迹</div>'
+      + '<div><span class="legend-line" style="border-color:#ddd"></span>实际轨迹</div>';
+  }
+}
+
+function signedExceedColor(point, singleMode){
+  if(!singleMode) return EXCEED_COLOR;
+  return Number(point?.alt_dev || 0) < 0 ? EXCEED_COLOR : HIGH_EXCEED_COLOR;
+}
+
+function drawExceedSegment(points, color){
+  if(points.length >= 2){
+    L.polyline(points,{color,weight:3.4,opacity:0.92}).addTo(routeLayer);
+  }
+}
+
+function focusDistance(key, dist, actualPoint){
+  const data = ALL_DAYS[key];
+  if(!data) return;
+  const actual = actualPoint || nearestPoint(data.deviation_data||[], dist);
+  const plan = interpolatePlan(data.plan_waypoints||[], dist);
+  const focusLatLng = actual ? [actual.lat, actual.lon] : (plan ? [plan.lat, plan.lon] : null);
+  focusLayer.clearLayers();
+  if(plan && actual){
+    L.polyline([[plan.lat,plan.lon],[actual.lat,actual.lon]],{color:'#ffffff',weight:1.5,opacity:0.8,dashArray:'4,4'})
+      .addTo(focusLayer);
+  }
+  if(plan){
+    L.circleMarker([plan.lat,plan.lon],{radius:6,color:PLAN_COLOR,weight:2,fillColor:'#fff',fillOpacity:0.8})
+      .bindTooltip('计划: '+fmtFt(plan.alt),{permanent:false}).addTo(focusLayer);
+  }
+  if(actual){
+    const diff = plan ? actual.alt - plan.alt : null;
+    let tip = `${key}<br/>距离 ${Number(actual.dis ?? dist).toFixed(0)} nm<br/>实际: ${fmtFt(actual.alt)}<br/>计划: ${fmtFt(plan?.alt)}`;
+    if(Number.isFinite(diff)) tip += `<br/>高度差: ${diff.toFixed(0)} ft`;
+    if(Number.isFinite(actual.xt)) tip += `<br/>水平偏差: ${Math.abs(actual.xt).toFixed(2)} nm`;
+    if(actual.t) tip += `<br/>时间: ${actual.t}`;
+    const marker = L.circleMarker([actual.lat,actual.lon],{radius:8,color:'#fff',weight:2,fillColor:ACTUAL_COLOR,fillOpacity:0.95})
+      .bindTooltip(tip,{permanent:false,sticky:true})
+      .addTo(focusLayer);
+    marker.openTooltip();
+  }
+  if(focusLatLng) map.panTo(focusLatLng, {animate:true, duration:0.35});
+  showChartsAt(key, dist);
+}
+
+function showChartsAt(key, dist){
+  const idx = chartFocusIndex[key];
+  if(!idx) return;
+  const altDataIndex = nearestPointIndex(idx.altPoints, dist);
+  const xtDataIndex = nearestPointIndex(idx.xtPoints, dist);
+  if(altDataIndex>=0){
+    chartAlt.dispatchAction({type:'showTip',seriesIndex:idx.actualAltSeriesIndex,dataIndex:altDataIndex});
+  }
+  if(xtDataIndex>=0){
+    chartXT.dispatchAction({type:'showTip',seriesIndex:idx.xtSeriesIndex,dataIndex:xtDataIndex});
+  }
+}
+
+function updateMap(){
+  routeLayer.clearLayers();
+  focusLayer.clearLayers();
+  const selected = getSelectedKeys();
+  if(selected.length === 0){ updateMapLegend(false); return; }
+  const singleMode = selected.length === 1;
+  updateMapLegend(singleMode);
+
   let allCoords = [];
+  const labelBuckets = {};
   selected.forEach((key,idx)=>{
     const data = ALL_DAYS[key];
-    if(!data || !data.deviation_data) return;
+    if(!data) return;
     const color = DAY_COLORS[idx % DAY_COLORS.length];
-    const pts = data.deviation_data.filter(p=>cruiseOnly?p.is_cruise:true);
-    if(pts.length===0) return;
+    const planColor = singleMode ? PLAN_COLOR : color;
+    const actualColor = singleMode ? ACTUAL_COLOR : color;
+    const devPtsAll = data.deviation_data || [];
+    const devPts = devPtsAll.filter(p=>cruiseOnly?p.is_cruise:true);
+    const trackPts = (data.actual_track && data.actual_track.length) ? data.actual_track : devPtsAll;
 
-    // Track line
-    // Show country names in tooltip by finding unique countries in this track
-    let countries = [...new Set(pts.map(p=>p.country).filter(c=>c&&c!=='XX'))];
-    let tip = key + (countries.length>0?' | '+countries.join('→'):'');
-    L.polyline(pts.map(p=>[p.lat,p.lon]),{color:color,weight:1.5,opacity:0.6}).bindTooltip(tip).addTo(map);
-
-    // Highlight exceed segments
-    const exceed = [];
-    for(let i=0;i<pts.length;i++){
-      if(Math.abs(pts[i].alt_dev) >= altThreshold){
-        exceed.push([pts[i].lat, pts[i].lon]);
-      } else if(exceed.length>2){
-        L.polyline(exceed,{color:'#ff3333',weight:3,opacity:0.9}).addTo(map);
-        exceed.length=0;
-      } else { exceed.length=0; }
+    if(data.plan_waypoints && data.plan_waypoints.length){
+      L.polyline(data.plan_waypoints.map(w=>[w.lat,w.lon]),{color:planColor,weight:singleMode?2.4:1.8,opacity:0.75,dashArray:'6,4'}).addTo(routeLayer);
+      data.plan_waypoints.filter(w=>w.alt>100).forEach(w=>{
+        L.circleMarker([w.lat,w.lon],{radius:2,color:planColor,fillOpacity:0.45}).bindTooltip(w.name).addTo(routeLayer);
+      });
     }
-    if(exceed.length>2) L.polyline(exceed,{color:'#ff3333',weight:3,opacity:0.9}).addTo(map);
+    if(trackPts.length===0) return;
 
-    allCoords = allCoords.concat(pts.map(p=>[p.lat,p.lon]));
+    let countries = [...new Set(devPtsAll
+      .map(p=>p.country_label||p.country)
+      .filter(c=>c&&c!=='XX'&&c!=='海上/公海'&&c!=='海上'))];
+    let tip = key + (countries.length>0?' | '+countries.join('→'):'');
+    L.polyline(trackPts.map(p=>[p.lat,p.lon]),{color:actualColor,weight:singleMode?2.6:2,opacity:0.76})
+      .bindTooltip(tip)
+      .on('click',e=>{
+        const nearest = nearestLatLonPoint(devPtsAll, e.latlng);
+        if(nearest) focusDistance(key, nearest.dis, nearest);
+      })
+      .addTo(routeLayer);
+
+    if(singleMode){
+      devPtsAll.forEach(p=>{
+        const pointColor = Math.abs(Number(p.alt_dev || 0)) >= altThreshold ? signedExceedColor(p, true) : actualColor;
+        L.circleMarker([p.lat,p.lon],{radius:3,color:pointColor,weight:1,opacity:0.72,fillColor:pointColor,fillOpacity:0.5})
+          .bindTooltip(`${key}<br/>距离 ${Number(p.dis||0).toFixed(0)} nm<br/>实际 ${fmtFt(p.alt)}<br/>计划 ${fmtFt(p.plan_alt)}`,{sticky:true})
+          .on('click',()=>focusDistance(key,p.dis,p))
+          .addTo(routeLayer);
+      });
+    }
+
+    let exceed = [];
+    let exceedColor = null;
+    for(let i=0;i<devPts.length;i++){
+      if(Math.abs(devPts[i].alt_dev) >= altThreshold){
+        const color = signedExceedColor(devPts[i], singleMode);
+        if(exceed.length && color !== exceedColor){
+          drawExceedSegment(exceed, exceedColor);
+          exceed = [];
+        }
+        exceedColor = color;
+        exceed.push([devPts[i].lat, devPts[i].lon]);
+      } else {
+        drawExceedSegment(exceed, exceedColor);
+        exceed = [];
+        exceedColor = null;
+      }
+    }
+    drawExceedSegment(exceed, exceedColor);
+
+    devPtsAll.forEach(p=>{
+      const label = p.country_label || p.country;
+      if(!label || label==='XX' || label==='海上/公海' || label==='海上') return;
+      if(!labelBuckets[label]) labelBuckets[label] = {lat:0, lon:0, count:0};
+      labelBuckets[label].lat += p.lat; labelBuckets[label].lon += p.lon; labelBuckets[label].count += 1;
+    });
+    allCoords = allCoords.concat(trackPts.map(p=>[p.lat,p.lon]));
+  });
+  Object.keys(labelBuckets).forEach(name=>{
+    const b = labelBuckets[name];
+    const icon = L.divIcon({className:'country-label',html:name,iconSize:[80,20]});
+    L.marker([b.lat/b.count,b.lon/b.count],{icon,interactive:false}).addTo(routeLayer);
   });
   if(allCoords.length>0) map.fitBounds(L.latLngBounds(allCoords),{padding:[30,30]});
 }
 
 function updateCharts(){
   const selected = getSelectedKeys();
+  const singleMode = selected.length === 1;
   const altSeries=[], xtSeries=[];
-  let planDistMap = {}; // For tooltip lookup: dist->plan_alt
-  if(selected.length>0){
-    const first = ALL_DAYS[selected[0]];
-    if(first && first.plan_waypoints){
-      altSeries.push({name:'计划高度',type:'line',data:first.plan_waypoints.map(w=>[w.dist,w.alt]),
-        lineStyle:{color:'#ffaa00',width:2.5,type:'dashed'},symbol:'none'});
-      first.plan_waypoints.forEach(w=>{planDistMap[w.dist.toFixed(1)]=w.alt;});
-    }
-  }
+  chartFocusIndex = {};
+  chartSeriesLookup = {alt:{}, xt:{}};
   selected.forEach((key,idx)=>{
     const data = ALL_DAYS[key];
     if(!data||!data.deviation_data) return;
-    const pts = data.deviation_data.filter(p=>cruiseOnly?p.is_cruise:true);
+    const pts = data.deviation_data;
     if(pts.length===0) return;
     const color = DAY_COLORS[idx % DAY_COLORS.length];
-    altSeries.push({name:'实际高度',type:'line',data:pts.map(p=>[p.dis,p.alt]),
-      lineStyle:{color,width:1.2},symbol:'none'});
-    xtSeries.push({name:key,type:'line',data:pts.map(p=>[p.dis,Math.abs(p.xt)]),
-      lineStyle:{color,width:1},symbol:'none'});
+    const planColor = singleMode ? PLAN_COLOR : color;
+    const actualColor = singleMode ? ACTUAL_COLOR : color;
+    const planName = singleMode ? '计划高度' : key + ' 计划';
+    const actualName = singleMode ? '实际高度' : key + ' 实际';
+    const xtPlanName = singleMode ? '计划基准' : key + ' 计划';
+    const xtActualName = singleMode ? '实际偏差' : key;
+    if(data.plan_waypoints && data.plan_waypoints.length){
+      const planSeriesIndex = altSeries.length;
+      altSeries.push({name:planName,type:'line',key,kind:'plan',data:data.plan_waypoints.map(w=>[w.dist,w.alt]),
+        color:planColor,itemStyle:{color:planColor},
+        lineStyle:{color:planColor,width:singleMode?2.1:1.6,type:'dashed'},
+        symbol:singleMode?'circle':'none',symbolSize:singleMode?4:0,showSymbol:singleMode});
+      chartSeriesLookup.alt[planSeriesIndex] = {key, kind:'plan'};
+    }
+    const actualAltSeriesIndex = altSeries.length;
+    altSeries.push({name:actualName,type:'line',key,kind:'actual',data:pts.map(p=>[p.dis,p.alt]),
+      color:actualColor,itemStyle:{color:actualColor},
+      lineStyle:{color:actualColor,width:singleMode?1.7:1.2},
+      symbol:singleMode?'circle':'none',symbolSize:singleMode?4:0,showSymbol:singleMode});
+    chartSeriesLookup.alt[actualAltSeriesIndex] = {key, kind:'actual'};
+    if(singleMode){
+      const xtPlanSeriesIndex = xtSeries.length;
+      xtSeries.push({name:xtPlanName,type:'line',key,kind:'xtPlan',data:pts.map(p=>[p.dis,0]),
+        color:planColor,itemStyle:{color:planColor},
+        lineStyle:{color:planColor,width:1.4,type:'dashed'},
+        symbol:'none',symbolSize:0,showSymbol:false});
+      chartSeriesLookup.xt[xtPlanSeriesIndex] = {key, kind:'xtPlan'};
+    }
+    const xtSeriesIndex = xtSeries.length;
+    xtSeries.push({name:xtActualName,type:'line',key,kind:'xtActual',data:pts.map(p=>[p.dis,Math.abs(p.xt)]),
+      color:actualColor,itemStyle:{color:actualColor},
+      lineStyle:{color:actualColor,width:1},
+      symbol:singleMode?'circle':'none',symbolSize:singleMode?4:0,showSymbol:singleMode});
+    chartSeriesLookup.xt[xtSeriesIndex] = {key, kind:'xtActual'};
+    chartFocusIndex[key] = {actualAltSeriesIndex, xtSeriesIndex, altPoints:pts, xtPoints:pts};
   });
-  // Merge duplicate legend for '实际高度'
-  const mergedAlt = []; const sn = new Set();
-  altSeries.forEach(s=>{if(!sn.has(s.name)){sn.add(s.name);mergedAlt.push(s);}});
 
   // Tooltip that shows plan + actual
   function tooltipFormatter(params){
     let dist = params[0]?.value[0];
+    if(singleMode && selected.length===1 && Number.isFinite(dist)){
+      const key = selected[0];
+      const data = ALL_DAYS[key] || {};
+      const actual = nearestPoint(data.deviation_data||[], dist);
+      const plan = interpolatePlan(data.plan_waypoints||[], dist);
+      const diff = actual && plan ? actual.alt - plan.alt : null;
+      let html = '<b>距离: '+dist.toFixed(0)+' nm</b><br/>';
+      html += `<span style="color:${PLAN_COLOR}">●</span> 计划高度: `+fmtFt(plan?.alt)+'<br/>';
+      html += `<span style="color:${ACTUAL_COLOR}">●</span> 实际高度: `+fmtFt(actual?.alt)+'<br/>';
+      if(Number.isFinite(diff)) html += '高度偏差: '+diff.toFixed(0)+' ft<br/>';
+      if(actual?.t) html += '时间: '+actual.t+'<br/>';
+      return html;
+    }
     let html = '<b>距离: '+(dist?dist.toFixed(0):'?')+' nm</b><br/>';
     for(let p of params){
-      if(p.seriesName==='计划高度'){
-        html += p.marker+' 计划高度: '+p.value[1].toFixed(0)+' ft<br/>';
-      }
-    }
-    for(let p of params){
-      if(p.seriesName==='实际高度'){
-        html += p.marker+' 实际高度: '+p.value[1].toFixed(0)+' ft<br/>';
-      }
+      html += p.marker+' '+p.seriesName+': '+p.value[1].toFixed(0)+' ft<br/>';
     }
     return html;
   }
 
   chartAlt.setOption({title:{text:'高度剖面对比',left:'center',textStyle:{color:'#ccc',fontSize:13}},
     tooltip:{trigger:'axis',formatter:tooltipFormatter},
-    legend:{bottom:0,textStyle:{color:'#aaa',fontSize:9},data:['计划高度','实际高度']},
+    legend:{bottom:0,textStyle:{color:'#aaa',fontSize:9},type:'scroll',data:singleMode?['计划高度','实际高度']:undefined},
     grid:{top:35,bottom:35,left:55,right:15},
     xAxis:{type:'value',name:'',nameTextStyle:{color:'#888'},axisLabel:{fontSize:10}},
     yAxis:{type:'value',name:'Height (ft)',nameTextStyle:{color:'#888'},axisLabel:{fontSize:10}},
-    series:mergedAlt,backgroundColor:'transparent'});
+    series:altSeries,backgroundColor:'transparent'}, true);
 
   chartXT.setOption({title:{text:'水平偏差',left:'center',textStyle:{color:'#ccc',fontSize:13}},
     tooltip:{trigger:'axis'},
-    legend:{bottom:0,textStyle:{color:'#aaa',fontSize:9}},
+    legend:{bottom:0,textStyle:{color:'#aaa',fontSize:9},type:'scroll',data:singleMode?['计划基准','实际偏差']:undefined},
     grid:{top:35,bottom:35,left:55,right:15},
     xAxis:{type:'value',name:'',nameTextStyle:{color:'#888'},axisLabel:{fontSize:10}},
     yAxis:{type:'value',name:'XT (nm)',nameTextStyle:{color:'#888'},axisLabel:{fontSize:10}},
-    series:xtSeries,backgroundColor:'transparent'});
+    series:xtSeries,backgroundColor:'transparent'}, true);
 }
 
 function updateExceed(){
@@ -233,8 +444,22 @@ function updateExceed(){
   document.getElementById('exceedCount').textContent = count;
 }
 
+function handleChartFocus(params, chartKind){
+  const lookup = chartKind === 'xt' ? chartSeriesLookup.xt : chartSeriesLookup.alt;
+  const meta = lookup[params.seriesIndex];
+  if(!meta || !params.value) return;
+  const dist = Number(params.value[0]);
+  if(!Number.isFinite(dist)) return;
+  const data = ALL_DAYS[meta.key] || {};
+  const actual = nearestPoint(data.deviation_data||[], dist);
+  focusDistance(meta.key, dist, actual);
+}
+
 function selAll(){ document.querySelectorAll('#flightList input').forEach(c=>c.checked=true);refreshAll(); }
 function selNone(){ document.querySelectorAll('#flightList input').forEach(c=>c.checked=false);refreshAll(); }
+
+chartAlt.on('click', params => handleChartFocus(params, 'alt'));
+chartXT.on('click', params => handleChartFocus(params, 'xt'));
 
 document.getElementById('cruiseOnly').addEventListener('change',function(){
   cruiseOnly=this.checked;refreshAll();});

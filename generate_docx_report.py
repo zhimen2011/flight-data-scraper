@@ -95,6 +95,16 @@ def _build_all_valid_fls():
     return sorted(fls)
 
 
+def _is_domestic_descent(descent):
+    if not descent:
+        return False
+    if "is_domestic_descent" in descent:
+        return bool(descent.get("is_domestic_descent"))
+    if descent.get("actual_descent_start_iso") == "CN":
+        return True
+    return str(descent.get("region", "") or "") in {"domestic", "CN", "China", "国内段", "中国"}
+
+
 ALL_VALID_FL = _build_all_valid_fls()
 
 # CAAC metric RVSM levels: {meters: FL_equivalent}
@@ -121,16 +131,27 @@ def nearest_valid_fl(alt_ft):
     return min(ALL_VALID_FL, key=lambda x: abs(x - fl))
 
 
+def standard_icao_fl(alt_ft):
+    """Round non-China altitudes to ordinary ICAO whole-thousand flight levels."""
+    return max(0, int(round(float(alt_ft or 0) / 1000.0)) * 10)
+
+
+def regional_fl(alt_ft, region=None):
+    if region in ("国内段", "CN", "China", "中国"):
+        return nearest_valid_fl(alt_ft)
+    return standard_icao_fl(alt_ft)
+
+
 def format_altitude(alt_ft, region=None):
     """Format altitude respecting regional standards (input in FEET)."""
     if alt_ft <= 0:
         return "0"
 
-    fl = nearest_valid_fl(alt_ft)
+    fl = regional_fl(alt_ft, region)
     alt_m = round(alt_ft * 0.3048)
 
     # China: show CAAC standard meters + FL
-    if region in ("国内段", "CN"):
+    if region in ("国内段", "CN", "China", "中国"):
         nearest_m = min(CAAC_RVSM_M_TO_FL.keys(), key=lambda m: abs(m - alt_m))
         if nearest_m and abs(nearest_m - alt_m) < 200:
             fl_caac = CAAC_RVSM_M_TO_FL[nearest_m]
@@ -144,9 +165,9 @@ def format_fl_deviation(plan_alt, actual_alt, region=None):
     """
     Describe altitude deviation using valid flight levels.
     """
-    plan_fl = nearest_valid_fl(plan_alt)
-    actual_fl = nearest_valid_fl(actual_alt)
-    diff_levels = abs(plan_fl - actual_fl) // 10  # FL351 vs FL291 = 6 levels, not 60
+    plan_fl = regional_fl(plan_alt, region)
+    actual_fl = regional_fl(actual_alt, region)
+    diff_levels = max(1, int(round(abs(plan_fl - actual_fl) / 20))) if plan_fl != actual_fl else 0
     diff_ft = abs(plan_alt - actual_alt)
 
     direction = "高于" if actual_alt > plan_alt else "低于"
@@ -296,7 +317,7 @@ def generate_main_report(all_results, config, output_path):
         descent_flights = []
         for (flight, date_str), result in dir_results.items():
             da = result.get("descent_analysis")
-            if da and da.get("is_premature"):
+            if da and da.get("is_premature") and _is_domestic_descent(da):
                 descent_flights.append((flight, date_str, da))
 
         if descent_flights:
@@ -381,7 +402,7 @@ def generate_main_report(all_results, config, output_path):
 
     headers = ['航班日期', '航班号', '机号', '始发站', '到达站', '备注']
     rows = []
-    for (flight, date_str), result in sorted(all_results.items()):
+    for (flight, date_str), result in sorted(all_results.items(), key=lambda item: (item[0][1], item[0][0])):
         plan_wp = result.get("_plan_waypoints_raw", [])
         dep = plan_wp[0]["name"] if plan_wp else "?"
         arr = plan_wp[-1]["name"] if plan_wp else "?"
@@ -407,7 +428,7 @@ def generate_appendix(all_results, config, output_path, country_index):
     doc.add_heading('附件：飞行剖面对比图', level=0)
 
     direction_order = []
-    for (flight, date_str), result in sorted(all_results.items()):
+    for (flight, date_str), result in sorted(all_results.items(), key=lambda item: (item[0][1], item[0][0])):
         if _is_outbound(flight, config):
             direction_order.append(("去程", flight, date_str, result))
         else:
@@ -446,9 +467,12 @@ def generate_appendix(all_results, config, output_path, country_index):
             notes = []
             for w in warnings[:3]:
                 dir_text = "偏高" if w["direction"] == "偏高" else "偏低"
+                region = w.get("region")
+                plan_fmt = format_altitude(w.get("plan_alt", 0), region)
+                actual_fmt = format_altitude(w.get("actual_alt", 0), region)
                 notes.append(
-                    f'{w["region"]}区域{dir_text}：计划FL{int(w["plan_alt"]/100)} '
-                    f'实际FL{int(w["actual_alt"]/100)}，偏差{w["avg_dev_ft"]:.0f}ft，持续{w["duration_nm"]:.0f}nm'
+                    f'{w["region"]}区域{dir_text}：计划{plan_fmt} '
+                    f'实际{actual_fmt}，偏差{w["avg_dev_ft"]:.0f}ft，持续{w["duration_nm"]:.0f}nm'
                 )
             doc.add_paragraph('\n'.join(notes))
 

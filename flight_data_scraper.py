@@ -12,7 +12,10 @@ import os
 import argparse
 import sys
 
+from flight_keys import build_flight_key
+
 BASE_URL = "http://192.168.8.18:8082"
+REQUEST_TIMEOUT = 180
 
 
 def search_flights(flight_number, date_start, date_end=None):
@@ -21,7 +24,7 @@ def search_flights(flight_number, date_start, date_end=None):
         date_end = date_start
     url = f"{BASE_URL}/getFlightListByAN"
     params = {"fi": flight_number, "staDate": date_start, "endDate": date_end}
-    resp = requests.get(url, params=params)
+    resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
     resp.raise_for_status()
     return resp.json()
 
@@ -30,7 +33,7 @@ def get_flight_his_pos(flight_id, begin_time, end_time):
     """获取历史飞行位置数据 (实际轨迹+剖面)"""
     url = f"{BASE_URL}/getFlightHisPos"
     params = {"fi": flight_id, "beginTime": begin_time, "endTime": end_time}
-    resp = requests.get(url, params=params)
+    resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
     resp.raise_for_status()
     data = resp.json()
     if isinstance(data, dict) and "data" in data:
@@ -48,7 +51,7 @@ def get_flight_plan_points(flight_id, aircraft, dep_airport, arr_airport, date_s
         "arrAirport": arr_airport,
         "date": date_str,
     }
-    resp = requests.get(url, params=params)
+    resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
     resp.raise_for_status()
     return resp.json()
 
@@ -111,7 +114,7 @@ def process_flight(flight_number, date_str, end_date=None):
 
         # 从起飞时间提取实际飞行日期用于文件命名
         flight_date = tko_time[:10] if tko_time and len(tko_time) >= 10 else date_str
-        base_prefix = f"{flight_id}_{flight_date}"
+        base_prefix = build_flight_key(flight_id or flight_number, flight_date, tko_time)
         # 同日多班次加序号，避免文件覆盖
         prefix_counter[base_prefix] = prefix_counter.get(base_prefix, 0) + 1
         if prefix_counter[base_prefix] > 1:

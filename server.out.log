@@ -1,0 +1,93 @@
+
+  航班分析服务器已启动
+  浏览器打开: http://localhost:8765
+  按 Ctrl+C 停止
+
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-17_170204_plan_track.csv (93 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-17_170204_plan_profile.csv (93 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-17_170204_actual_track.csv (1478 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-17_170204_actual_profile.csv (1478 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-17_034936_plan_track.csv (80 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-17_034936_plan_profile.csv (80 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-17_034936_actual_track.csv (751 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-17_034936_actual_profile.csv (751 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-15_144723_plan_track.csv (93 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-15_144723_plan_profile.csv (93 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-15_144723_actual_track.csv (1298 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-15_144723_actual_profile.csv (1298 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-15_035506_plan_track.csv (80 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-15_035506_plan_profile.csv (80 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-15_035506_actual_track.csv (1424 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-15_035506_actual_profile.csv (1424 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-13_170040_plan_track.csv (93 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-13_170040_plan_profile.csv (93 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-13_170040_actual_track.csv (1244 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-13_170040_actual_profile.csv (1244 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-13_162348_plan_track.csv (93 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-13_162348_plan_profile.csv (93 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-13_162348_actual_track.csv (1245 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-13_162348_actual_profile.csv (1245 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-13_052129_plan_track.csv (80 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-13_052129_plan_profile.csv (80 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-13_052129_actual_track.csv (943 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-13_052129_actual_profile.csv (943 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-12_164813_plan_track.csv (93 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-12_164813_plan_profile.csv (93 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-12_164813_actual_track.csv (312 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-12_164813_actual_profile.csv (312 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-12_045708_plan_track.csv (80 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-12_045708_plan_profile.csv (80 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-12_045708_actual_track.csv (1468 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-12_045708_actual_profile.csv (1468 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-11_191006_plan_track.csv (93 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-11_191006_plan_profile.csv (93 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-11_191006_actual_track.csv (1084 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-11_191006_actual_profile.csv (1084 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-11_073926_plan_track.csv (80 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-11_073926_plan_profile.csv (80 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-11_073926_actual_track.csv (1544 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-11_073926_actual_profile.csv (1544 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-10_214924_plan_track.csv (93 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-10_214924_plan_profile.csv (93 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-10_214924_actual_track.csv (1480 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-10_214924_actual_profile.csv (1480 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-10_112603_plan_track.csv (80 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-10_112603_plan_profile.csv (80 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-10_112603_actual_track.csv (1578 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-10_112603_actual_profile.csv (1578 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-10_011316_plan_track.csv (92 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-10_011316_plan_profile.csv (92 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-10_011316_actual_track.csv (1253 条记录)
+  已保存: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-10_011316_actual_profile.csv (1253 条记录)
+  Loaded 258 countries from GeoJSON
+
+  计划文件: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-17_170204_plan_track.csv
+  实际文件: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-17_170204_actual_track.csv
+  计划航路点: 93, 实际轨迹点: 1478
+
+  计划文件: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-17_034936_plan_track.csv
+  实际文件: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-17_034936_actual_track.csv
+  计划航路点: 80, 实际轨迹点: 751
+
+  计划文件: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-15_144723_plan_track.csv
+  实际文件: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-15_144723_actual_track.csv
+  计划航路点: 93, 实际轨迹点: 1298
+
+  计划文件: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-15_035506_plan_track.csv
+  实际文件: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-15_035506_actual_track.csv
+  计划航路点: 80, 实际轨迹点: 1424
+
+  计划文件: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-13_170040_plan_track.csv
+  实际文件: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-13_170040_actual_track.csv
+  计划航路点: 93, 实际轨迹点: 1244
+
+  计划文件: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-13_162348_plan_track.csv
+  实际文件: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-13_162348_actual_track.csv
+  计划航路点: 93, 实际轨迹点: 1245
+
+  计划文件: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-13_052129_plan_track.csv
+  实际文件: E:\TEST\flight-data-scraper\flight_csv\I99851_2026-04-13_052129_actual_track.csv
+  计划航路点: 80, 实际轨迹点: 943
+
+  计划文件: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-12_164813_plan_track.csv
+  实际文件: E:\TEST\flight-data-scraper\flight_csv\I99852_2026-04-12_164813_actual_track.csv

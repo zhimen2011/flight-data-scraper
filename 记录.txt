@@ -1,6 +1,60 @@
- 已记录。下次可以从这里直接继续：
+2026-05-07 打包完成：
 
-  - 脚本: E:\TEST\test\flight_data_scraper.py
-  - 用法: python flight_data_scraper.py -f <航班号> -d <日期>                                                                            - 已验证: I99806 2026-04-29 四条 CSV 在 E:\TEST\test\flight_csv\
-  - 记忆文件: flight-data-scraper.md 记录了所有 API 接口和参数细节                                                                     
-  关键发现备忘：计划轨迹的 date 参数要传 tKO_TIME_OFF，an 要传机尾号（B-2079 这种），这两个坑已经趟过了。
+- 已执行 `python -m PyInstaller --clean --noconfirm FlightDeviationTool.spec`。
+- 输出文件：`dist/FlightDeviationTool.exe`。
+- exe 大小约 49 MB。
+- 冒烟测试通过：启动 exe 后访问 `http://localhost:8765` 返回 200。
+- 测试后已停止 exe 进程，并清理 `dist` 下 PyInstaller 运行时临时目录；当前 `dist` 只保留 `FlightDeviationTool.exe`。
+
+2026-05-07 继续进度：CSV 新旧数据分离/归档功能已完成代码验证，未打包：
+
+- 已修复 `tests/test_flight_server_archive.py`：
+    - 不再使用 `tempfile.TemporaryDirectory()`，避免 Windows 沙盒下临时目录无法创建子目录的 `PermissionError`。
+    - 改为在 `tests/_tmp_archive` 下用 `os.makedirs` 创建测试目录，并用 cleanup 清理。
+- 已新增 `pytest.ini`：
+    - 限定 pytest 从 `tests` 收集测试。
+    - 跳过 `_tmp_archive`、`_tmp_probe` 等测试临时目录。
+- 已更新 `.gitignore`：
+    - 忽略 `.pytest_cache/`、根目录 `tmp*/`、`tests/_tmp_archive/`、`tests/_tmp_probe/`。
+- 已补充 `flight_server.py` 启动开关：
+    - 设置 `FLIGHT_SERVER_NO_BROWSER=1` 时启动服务但不自动打开浏览器。
+    - 默认直接运行 `python flight_server.py` 仍会自动打开浏览器。
+- 验证结果：
+    - `python -m py_compile flight_server.py tests\test_flight_server_archive.py` 通过。
+    - `python -m pytest -q` 通过，16 passed。
+    - 本地临时 HTTP 服务验证通过：`/` 页面可返回，`/api/list_csv` 返回 2 条当前 CSV，`/api/run_all_reports` 对当前 2 条 I99851 数据成功生成报告。
+    - 本次验证新生成报告：`I99851_stats_20260507_0836.docx`、`I99851_appendix_20260507_0836.docx`、`I99851_integrated_20260507_0837.html`。
+- 当前服务状态：
+    - 已启动本地 Web 服务：`http://localhost:8765`
+    - 进程 PID：5016
+- 注意：
+    - 今天没有执行真实“抓取”请求。
+    - 今天没有手动调用 `/api/archive_csv`，也没有主动移动当前 `flight_csv` 数据。
+    - 下一步如果要用页面做完整“抓取 -> 分析 -> 生成报告”验收，点击“开始抓取”前会先自动归档当前 `flight_csv` 中的 I99851 数据。
+
+2026-05-07 暂停点：CSV 新旧数据分离/归档功能（未完成验证，未打包）：
+
+- 用户问题：偏差分析页会把新抓取和旧 CSV 混在一起；用户希望每次只分析新的，旧数据自动归档。
+- 已开始修改 flight_server.py：
+    - 新增 `CSV_ARCHIVE_DIR = flight_csv_archive`。
+    - 新增 `archive_active_csv_data(csv_dir=None, archive_root=None)`：用于把当前 `flight_csv` 目录中的 `.csv` 文件和 `metadata.json` 移动到 `flight_csv_archive/时间戳/`。
+    - 新增 `list_active_csv_files(csv_dir=None)`：只列出当前 `flight_csv` 根目录下的 `_plan_track.csv`，不再递归扫子目录，避免旧数据混入偏差分析列表。
+    - `_api_scrape` 已接入抓取前自动归档：点“开始抓取”后会先归档旧 CSV，再写入新抓取数据。
+    - 新增后端 `/api/archive_csv`，用于手动归档当前数据。
+    - 偏差分析页按钮区已新增“归档当前数据”按钮，对应前端 `archiveCurrentCsv()`。
+- 已新增测试文件 `tests/test_flight_server_archive.py`，用于验证：
+    - 当前 CSV 和 metadata 会被移动到归档目录。
+    - 偏差分析列表只读取当前根目录，不读取归档/子目录。
+- 当前验证状态：
+    - `python -m py_compile flight_server.py tests\test_flight_server_archive.py` 已通过。
+    - `python -m pytest -q` 当前失败 2 个新增归档测试，原因不是业务断言失败，而是测试使用 `tempfile.TemporaryDirectory()` 时在当前沙盒下创建临时目录子目录报 `PermissionError`。
+    - 需要明天把测试临时目录改到一个明确可写的位置，或改为在 `tests/_tmp_archive` 下用安全清理方式创建，再重跑 pytest。
+- 注意：
+    - 这次归档功能代码尚未完成最终验证。
+    - 不要打包。
+    - 当前已有真实 `flight_csv` 数据不要手动移动，等明天确认测试和逻辑后再通过页面或接口归档。
+
+下一步建议：
+
+- 用 Web 界面完整跑一次“抓取 -> 分析 -> 生成报告”人工验收。
+- 如果界面文字仍有乱码，再集中清理 flight_server.py 中遗留的历史乱码提示文案。

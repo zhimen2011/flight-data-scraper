@@ -22,11 +22,26 @@ import sys
 import webbrowser
 from datetime import datetime
 
+from flight_keys import parse_flight_key
+
 # ─── Constants ───────────────────────────────────────────────────────────────
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+def _app_base_dir():
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def _resource_dir():
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return sys._MEIPASS
+    return _app_base_dir()
+
+
+BASE_DIR = _app_base_dir()
+RESOURCE_DIR = _resource_dir()
 CSV_DIR = os.path.join(BASE_DIR, "flight_csv")
 REPORTS_DIR = os.path.join(BASE_DIR, "reports")
-GEOJSON_PATH = os.path.join(BASE_DIR, "countries.geojson")
+GEOJSON_PATH = os.path.join(RESOURCE_DIR, "countries.geojson")
 
 # Altitudes in the CSV are in METERS — convert to feet
 M_TO_FT = 3.28084
@@ -52,12 +67,16 @@ DEFAULT_MIN_DURATION_NM = 50
 def load_config():
     """Load analysis config from JSON file, with fallback to defaults."""
     cfg_path = os.path.join(BASE_DIR, "analysis_config.json")
+    bundled_cfg_path = os.path.join(RESOURCE_DIR, "analysis_config.json")
     cfg = {"min_alt_deviation_ft": DEFAULT_MIN_ALT_DEV_FT,
            "min_duration_nm": DEFAULT_MIN_DURATION_NM}
-    if os.path.exists(cfg_path):
+    for path in (cfg_path, bundled_cfg_path):
+        if not os.path.exists(path):
+            continue
         try:
-            with open(cfg_path, "r") as f:
+            with open(path, "r") as f:
                 cfg.update(json.load(f))
+            break
         except Exception:
             pass
     return cfg
@@ -335,7 +354,7 @@ def find_csv_files(flight, date_str):
     ]
     plan_file = None
     for pat in patterns:
-        matches = glob.glob(pat)
+        matches = sorted(glob.glob(pat))
         if matches:
             plan_file = matches[0]
             break
@@ -349,9 +368,11 @@ def find_csv_files(flight, date_str):
         # Try same directory alternatives
         dirname = os.path.dirname(plan_file)
         basename = os.path.basename(plan_file).replace("_plan_track.csv", "")
-        alts = glob.glob(os.path.join(dirname, f"{basename}*actual_track.csv"))
+        alts = sorted(glob.glob(os.path.join(dirname, f"{basename}*actual_track.csv")))
         if alts:
             actual_file = alts[0]
+        else:
+            actual_file = None
 
     return plan_file, actual_file
 
@@ -622,6 +643,12 @@ def _finalize_event(e, dur):
     e["median_alt_dev"] = round(sorted(e["alt_devs"])[len(e["alt_devs"]) // 2], 0)
     e["plan_alt"] = round(e["points"][0]["plan_alt"], 0)
     e["actual_alt_median"] = round(sorted([p["alt"] for p in e["points"]])[len(e["points"]) // 2], 0)
+    countries = []
+    for p in e["points"]:
+        country = str(p.get("country", "") or "")
+        if country and country not in ("XX", "海上", "海上/公海") and country not in countries:
+            countries.append(country)
+    e["countries"] = countries
 
 
 # ─── Region Statistics ───────────────────────────────────────────────────────
@@ -667,7 +694,7 @@ def compute_region_stats(dev_results, cruise_points):
 
 # ─── Early Descent Detection ──────────────────────────────────────────────────
 
-def detect_descent_points(plan_waypoints, dev_results, country_index):
+def _detect_descent_points_legacy(plan_waypoints, dev_results, country_index):
     """
     Detect premature descent by comparing plan TOD with actual descent start.
     Algorithm:
@@ -765,6 +792,184 @@ def detect_descent_points(plan_waypoints, dev_results, country_index):
     }
 
 
+def _median(values):
+    if not values:
+        return None
+    values = sorted(values)
+    return values[len(values) // 2]
+
+
+def _find_explicit_tod_index(plan_waypoints):
+    for i in range(len(plan_waypoints) - 2, 0, -1):
+        name = str(plan_waypoints[i].get("name", "") or "").upper()
+        if name in ("TOD", "T/D") or "TOD" in name or "T/D" in name:
+            return i
+    return None
+
+
+def _find_profile_tod_index(plan_waypoints, max_alt):
+    """Find the last cruise-level waypoint before a planned descent starts."""
+    cruise_floor = max_alt * 0.85
+    for i in range(len(plan_waypoints) - 3, 0, -1):
+        curr = plan_waypoints[i]
+        if curr["alt"] < cruise_floor:
+            continue
+        future = [
+            w for w in plan_waypoints[i + 1:]
+            if 0 < w["dist"] - curr["dist"] <= 120
+        ]
+        if not future:
+            continue
+        min_future_alt = min(w["alt"] for w in future)
+        next_alt = plan_waypoints[i + 1]["alt"]
+        if curr["alt"] - min_future_alt >= 1000 and next_alt <= curr["alt"]:
+            return i
+    return None
+
+
+def _find_plan_tod_index(plan_waypoints):
+    """Find planned top of descent from profile shape, validating explicit TOD labels."""
+    if len(plan_waypoints) < 5:
+        return None
+
+    max_alt = max(w["alt"] for w in plan_waypoints)
+    cruise_floor = max_alt * 0.85
+    explicit_idx = _find_explicit_tod_index(plan_waypoints)
+    profile_idx = _find_profile_tod_index(plan_waypoints, max_alt)
+
+    if explicit_idx is not None and plan_waypoints[explicit_idx]["alt"] >= cruise_floor:
+        return explicit_idx
+    if profile_idx is not None:
+        return profile_idx
+    if explicit_idx is not None:
+        return explicit_idx
+
+    for i in range(len(plan_waypoints) - 2, 0, -1):
+        curr = plan_waypoints[i]["alt"]
+        next_w = plan_waypoints[i + 1]["alt"]
+        if curr > max_alt * 0.5 and next_w < curr * 0.5:
+            return i
+
+    for i in range(len(plan_waypoints) - 1, 0, -1):
+        if plan_waypoints[i]["alt"] > max_alt * 0.7:
+            return i
+    return None
+
+
+def _estimate_cruise_alt(points):
+    """Use the upper altitude band to avoid bias after descent has started."""
+    alts = sorted([p["alt"] for p in points if p.get("alt") is not None])
+    if not alts:
+        return None
+    top_count = max(5, len(alts) // 5)
+    return _median(alts[-top_count:])
+
+
+def _find_actual_descent_start(points, plan_tod_dist, stable_alt):
+    """Find actual TOD using a sustained descent window."""
+    search = [p for p in points if p["dis"] <= plan_tod_dist]
+    if len(search) < 10:
+        return None
+
+    for i, p in enumerate(search):
+        window = [q for q in points[i:] if 0 <= q["dis"] - p["dis"] <= 45]
+        if len(window) < 6:
+            continue
+        tail = window[-max(3, len(window) // 3):]
+        tail_alt = _median([q["alt"] for q in tail])
+        if tail_alt is None:
+            continue
+        cruise_loss = stable_alt - tail_alt
+        first_to_tail_loss = p["alt"] - tail_alt
+        low_tail = sum(1 for q in tail if q["alt"] <= stable_alt - 700)
+        if cruise_loss < 1000 or first_to_tail_loss < 500 or low_tail < max(2, len(tail) // 2):
+            continue
+
+        recovery = [
+            q for q in points
+            if p["dis"] + 45 < q["dis"] <= p["dis"] + 90
+        ]
+        if recovery and max(q["alt"] for q in recovery) > stable_alt - 300:
+            continue
+        return p
+    return None
+
+
+def _route_arrives_in_china(plan_waypoints, country_index):
+    """Return True when the planned destination is in China."""
+    if not plan_waypoints:
+        return False
+    last_wp = plan_waypoints[-1]
+    try:
+        _, iso_a2, _ = country_index.lookup(last_wp["lat"], last_wp["lon"])
+        if iso_a2 == "CN":
+            return True
+    except Exception:
+        pass
+    return str(last_wp.get("name", "") or "").upper().startswith("Z")
+
+
+def detect_descent_points(plan_waypoints, dev_results, country_index, config=None):
+    """Detect early descent by comparing planned TOD with actual sustained descent."""
+    if len(plan_waypoints) < 5 or len(dev_results) < 20:
+        return None
+    config = config or {}
+
+    plan_tod_idx = _find_plan_tod_index(plan_waypoints)
+    if plan_tod_idx is None:
+        return None
+
+    plan_tod_wp = plan_waypoints[plan_tod_idx]
+    plan_tod_dist = plan_tod_wp["dist"]
+    search_start = max(0, plan_tod_dist - config.get("descent_search_before_nm", 600))
+    search_end = min(plan_waypoints[-1]["dist"], plan_tod_dist + 90)
+    relevant = sorted(
+        [r for r in dev_results if search_start <= r["dis"] <= search_end],
+        key=lambda r: r["dis"],
+    )
+    if len(relevant) < 20:
+        return None
+
+    stable_alt = _estimate_cruise_alt([r for r in relevant if r["dis"] <= plan_tod_dist])
+    if stable_alt is None:
+        return None
+
+    actual_start = _find_actual_descent_start(relevant, plan_tod_dist, stable_alt)
+    if actual_start is None:
+        return None
+
+    actual_descent_start = actual_start["dis"]
+    nearest = min(plan_waypoints, key=lambda w: abs(w["dist"] - actual_descent_start))
+    descent_diff_nm = plan_tod_dist - actual_descent_start
+    threshold_nm = config.get("premature_descent_threshold_nm", 30)
+    is_premature = descent_diff_nm >= threshold_nm
+    country, iso_a2, region = country_index.lookup(actual_start["lat"], actual_start["lon"])
+
+    between_wps = [
+        w for w in plan_waypoints
+        if actual_descent_start <= w["dist"] <= plan_tod_dist and w["alt"] > 100
+    ]
+
+    return {
+        "region": region,
+        "plan_tod_wp": plan_tod_wp["name"],
+        "plan_tod_dist": round(plan_tod_dist, 1),
+        "plan_tod_alt": round(plan_tod_wp["alt"], 0),
+        "actual_descent_start_dist": round(actual_descent_start, 1),
+        "actual_descent_start_wp": nearest["name"],
+        "actual_descent_start_alt": round(actual_start["alt"], 0),
+        "actual_descent_start_country": country,
+        "actual_descent_start_iso": iso_a2,
+        "descent_diff_nm": round(descent_diff_nm, 1),
+        "is_premature": is_premature,
+        "is_domestic_descent": iso_a2 == "CN",
+        "threshold_nm": threshold_nm,
+        "stable_alt": round(stable_alt, 0),
+        "between_waypoints": [w["name"] for w in between_wps[:12]],
+        "method": "sustained_descent_window",
+    }
+
+
 # ─── Full Analysis Pipeline ──────────────────────────────────────────────────
 
 def analyze_flight(plan_file, actual_file, config, country_index):
@@ -828,8 +1033,10 @@ def analyze_flight(plan_file, actual_file, config, country_index):
 
     metadata["arrival_time_dev_min"] = time_dev_min
 
-    # Early descent detection (for domestic/arrival segment)
-    descent_analysis = detect_descent_points(plan_wp, dev_results, country_index)
+    # Early descent is only relevant to the domestic arrival segment.
+    descent_analysis = None
+    if _route_arrives_in_china(plan_wp, country_index):
+        descent_analysis = detect_descent_points(plan_wp, dev_results, country_index, config)
 
     # Generate warnings
     warnings = []
@@ -845,6 +1052,7 @@ def analyze_flight(plan_file, actual_file, config, country_index):
             "actual_alt": round(e["actual_alt_median"], 0),
             "avg_dev_ft": round(e["avg_alt_dev"], 0),
             "severity": "high" if abs(e["avg_alt_dev"]) >= 2000 else "medium",
+            "countries": e.get("countries", []),
         })
 
     # Summarize deviations across all cruise points
@@ -872,6 +1080,23 @@ def analyze_flight(plan_file, actual_file, config, country_index):
             {"name": w["name"], "dist": w["dist"], "alt": w["alt"], "lat": w["lat"], "lon": w["lon"]}
             for w in plan_wp
         ],
+        "actual_track": [
+            {
+                "t": p["time"][-8:] if len(p["time"]) >= 8 else p["time"],
+                "lat": round(p["lat"], 4),
+                "lon": round(p["lon"], 4),
+                "alt": round(p["alt"], 0),
+                "dis": round(p["dis"], 1),
+                "type": p.get("type", ""),
+            }
+            for p in actual_pts
+        ],
+        "diagnostics": {
+            "raw_actual_points": len(actual_pts),
+            "matched_deviation_points": len(dev_results),
+            "cruise_points": len(cruise_points),
+            "skipped_actual_points": max(0, len(actual_pts) - len(dev_results)),
+        },
         # For the HTML, we pass the full deviation data (simplified for size)
         "deviation_data": [
             {
@@ -1516,11 +1741,10 @@ def main():
         dates_seen = set()
         for f in sorted(all_files):
             fname = os.path.basename(f)
-            parts = fname.replace(".csv", "").split("_")
-            if len(parts) >= 2:
-                date_part = parts[1]
-                if len(date_part) == 10 and date_part[4] == "-":
-                    dates_seen.add(date_part)
+            base = fname.replace("_plan_track.csv", "")
+            parsed = parse_flight_key(base)
+            if parsed.flight.upper() == flight and len(parsed.date) == 10 and parsed.date[4] == "-":
+                dates_seen.add(parsed.date_key)
         dates_to_process = sorted(dates_seen)
         print(f"扫描到 {len(dates_to_process)} 个日期: {', '.join(dates_to_process)}")
     elif args.dates:

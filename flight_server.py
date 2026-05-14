@@ -2,23 +2,24 @@
 Flight Analysis Web GUI Server
 Start with: python flight_server.py → http://localhost:8765
 """
-import os, sys, json, csv, glob, threading, webbrowser, io, urllib.parse, re
+import os, sys, json, csv, glob, threading, webbrowser, io, urllib.parse, re, shutil
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from analyze_flight import (
+    BASE_DIR as APP_BASE_DIR,
     CountryIndex, GEOJSON_PATH, CSV_DIR, analyze_flight, find_csv_files, load_config,
 )
 from flight_data_scraper import (
     get_flight_plan_points, get_flight_his_pos, save_csv,
 )
+from flight_keys import build_flight_key, display_datetime_from_key, parse_flight_key
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = APP_BASE_DIR
 REPORTS_DIR = os.path.join(BASE_DIR, "reports")
+CSV_ARCHIVE_DIR = os.path.join(BASE_DIR, "flight_csv_archive")
 SCRAPE_URL = "http://192.168.8.18:8082"
-PROMPT_PATH = os.path.join(BASE_DIR, "report_prompt.txt")
-CONFIG_PATH = os.path.join(BASE_DIR, "deepseek_config.json")
 os.makedirs(REPORTS_DIR, exist_ok=True)
 
 GUI_HTML = r"""
@@ -77,7 +78,8 @@ select:focus{outline:none;border-color:#e94560;}
 <!-- TAB 0: Scrape -->
 <div class="tab-content active" id="tab0">
   <div class="search-bar">
-    <span>航班号:</span><input id="sFlight" placeholder="I98831,I98833" style="width:130px;">
+    <span>去程航班号:</span><input id="sOutboundFlights" placeholder="I99857,I99859" style="width:150px;">
+    <span>回程航班号:</span><input id="sReturnFlights" placeholder="I99858,I99860" style="width:150px;">
     <span>飞机号:</span><input id="sAircraft" placeholder="B-2079" style="width:80px;">
     <span>日期:</span><input id="sDateFrom" value="2026-04-01" style="width:95px;">
     <span>~</span><input id="sDateTo" value="2026-04-30" style="width:95px;">
@@ -103,21 +105,6 @@ select:focus{outline:none;border-color:#e94560;}
 
 <!-- TAB 1: Analyze -->
 <div class="tab-content" id="tab1">
-  <!-- API Key -->
-  <div class="section-box">
-    <h3>🔑 API 配置 <span id="apiStatus" class="dot-unknown">● 未检测</span>
-      <button class="btn-secondary" onclick="showApiEditor()" style="font-size:10px;padding:2px 8px;margin-left:10px;">编辑</button>
-    </h3>
-    <div id="apiSection" style="display:none;">
-      <div class="config-row">
-        <span>Key:</span><input id="apiKey" type="password" style="width:300px;" placeholder="sk-...">
-        <button class="btn-secondary" onclick="toggleApiVisibility()" style="font-size:10px;padding:2px 6px;">👁</button>
-        <span>Model:</span><input id="apiModel" value="deepseek-v4-pro" style="width:140px;">
-        <button class="btn-primary" onclick="testApiKey()">测试并保存</button>
-      </div>
-    </div>
-  </div>
-
   <!-- Thresholds -->
   <div class="config-row">
     <label>高度偏差阈值: <input type="range" id="aAlt" min="200" max="3000" value="1000" step="100" oninput="$('aAltVal').textContent=$('aAlt').value">
@@ -133,42 +120,16 @@ select:focus{outline:none;border-color:#e94560;}
     <button class="btn-secondary" onclick="selAnalyze(true)">全选</button>
     <button class="btn-secondary" onclick="selAnalyze(false)">清空</button>
     <button class="btn-secondary" onclick="refreshAnalyze()">刷新列表</button>
+    <button class="btn-secondary" onclick="archiveCurrentCsv()">归档当前数据</button>
   </div>
   <div class="status" id="analyzeStatus">已有数据</div>
   <div id="analyzeTable"></div>
 
   <!-- Action buttons -->
   <div class="btn-row">
-    <button class="btn-primary" onclick="runAnalysis()">▶ 运行偏差分析</button>
-    <button class="btn-primary" onclick="genWordReport()">生成 Word 报告</button>
-    <button class="btn-primary" onclick="genHtmlReport()">生成 HTML 集成报告</button>
-    <button class="btn-secondary" onclick="runAll()">全部（分析+Word+HTML）</button>
+    <button class="btn-primary" onclick="runAllReports()">一键生成报告</button>
     <div class="progress" style="flex:1;min-width:150px;"><div class="progress-bar" id="analyzeProgress"></div></div>
     <span class="status" id="analyzeMsg">就绪</span>
-  </div>
-
-  <!-- Prompt editor -->
-  <div class="section-box">
-    <h3 onclick="toggleSection('promptSection')">📝 报告 Prompt 模板 <span>(点击展开/折叠)</span></h3>
-    <div id="promptSection" style="display:none;">
-      <div class="upload-row">
-        <span>参考主报告:</span><input type="file" id="refMain" accept=".docx" onchange="uploadRef('main')">
-        <label class="file-label" for="refMain">选择文件</label>
-        <span class="file-name" id="refMainName"></span>
-      </div>
-      <div class="upload-row">
-        <span>参考附件:</span><input type="file" id="refApp" accept=".docx" onchange="uploadRef('app')">
-        <label class="file-label" for="refApp">选择文件</label>
-        <span class="file-name" id="refAppName"></span>
-      </div>
-      <textarea id="promptText" placeholder="加载中..."></textarea>
-      <div class="btn-row">
-        <button class="btn-secondary" onclick="loadPrompt()">刷新</button>
-        <button class="btn-secondary" onclick="resetPrompt()">恢复默认</button>
-        <button class="btn-primary" onclick="savePrompt()">保存 Prompt</button>
-        <span class="status" id="promptMsg"></span>
-      </div>
-    </div>
   </div>
 </div>
 
@@ -185,7 +146,7 @@ select:focus{outline:none;border-color:#e94560;}
 function switchTab(n){
   document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',i===n));
   document.querySelectorAll('.tab-content').forEach((t,i)=>t.classList.toggle('active',i===n));
-  if(n===1){refreshAnalyze();loadApiCfg();}
+  if(n===1) refreshAnalyze();
   if(n===2) refreshReports();
 }
 function toggleSection(id){var e=$(id);e.style.display=e.style.display==='none'?'block':'none';}
@@ -196,11 +157,7 @@ async function api(path,opt={}){
     else{r=await fetch(url);}
     if(!r.ok){let e=await r.text();throw new Error(e||r.statusText);}
     return await r.json();
-  }catch(e){alert('API 错误: '+e.message);return null;}
-}
-async function apiForm(path,formData){
-  try{let r=await fetch('/api'+path,{method:'POST',body:formData});if(!r.ok)throw new Error(await r.text());return await r.json();}
-  catch(e){alert('API 错误: '+e.message);return null;}
+  }catch(e){alert('请求错误: '+e.message);return null;}
 }
 function $(id){return document.getElementById(id);}
 function setStatus(id,txt){$(id).textContent=txt;}
@@ -210,13 +167,20 @@ async function readFileAsText(file){return new Promise((resolve)=>{let r=new Fil
 // ── TAB 0: Pool ──
 let pool=[],poolChecks={},autoBase='';
 async function searchFlights(){
-  let qs=`?flight=${encodeURIComponent($('sFlight').value)}&aircraft=${encodeURIComponent($('sAircraft').value)}&from=${$('sDateFrom').value}&to=${$('sDateTo').value}`;
+  let outbound=$('sOutboundFlights').value;
+  let returnFlights=$('sReturnFlights').value;
+  let qs=`?outbound=${encodeURIComponent(outbound)}&returnFlights=${encodeURIComponent(returnFlights)}&aircraft=${encodeURIComponent($('sAircraft').value)}&from=${$('sDateFrom').value}&to=${$('sDateTo').value}`;
   let r=await api('/search'+qs);
   if(!r){return;} if(r.error){alert(r.error);return;}
   let added=0;
-  r.results.forEach(fl=>{let k=fl.key;if(!pool.some(p=>p.key===k)){pool.push(fl);poolChecks[k]=true;added++;}});
-  if(r.autoBase){autoBase=r.autoBase;$('baseInfo').style.display='block';
-    $('baseInfo').textContent='自动识别基地: '+autoBase+' (从此机场起飞=去程，降落=回程)';}
+  r.results.forEach(fl=>{
+    let k=fl.key;
+    let existing=pool.find(p=>p.key===k);
+    if(existing){existing.dir=fl.dir||existing.dir;}
+    else{pool.push(fl);poolChecks[k]=true;added++;}
+  });
+  $('baseInfo').style.display='block';
+  $('baseInfo').textContent='方向已按去程/回程输入框写入，表格中仍可手动修正。';
   renderPool();setStatus('poolStatus','结果池（共 '+pool.length+' 条）');alert('新增 '+added+' 条');
 }
 function renderPool(){
@@ -258,29 +222,6 @@ async function startScrape(){
   setTimeout(refreshAnalyze,500);
 }
 
-// ── TAB 1: API Config ──
-function showApiEditor(){$('apiSection').style.display='block';}
-function toggleApiVisibility(){let i=$('apiKey');i.type=i.type==='password'?'text':'password';}
-async function loadApiCfg(){
-  let r=await api('/load_api_cfg');
-  if(!r)return;$('apiModel').value=r.model||'deepseek-v4-pro';
-  if(r.status==='ok'){$('apiStatus').innerHTML='<span class="dot-ok">● 正常</span>';}
-  else if(r.status==='unset'){$('apiStatus').innerHTML='<span class="dot-unknown">● 未配置</span>';}
-  else{$('apiStatus').innerHTML='<span class="dot-fail">● '+r.status+'</span>';}
-}
-async function testApiKey(){
-  $('apiStatus').innerHTML='<span class="dot-unknown">● 检测中...</span>';
-  let r=await api('/test_key',{method:'POST',body:{key:$('apiKey').value,model:$('apiModel').value}});
-  if(!r){$('apiStatus').innerHTML='<span class="dot-fail">● 网络错误</span>';return;}
-  if(r.ok){
-    $('apiStatus').innerHTML='<span class="dot-ok">● 正常</span>';
-    // Save and hide
-    await api('/save_key',{method:'POST',body:{key:$('apiKey').value,model:$('apiModel').value}});
-    $('apiKey').value='';$('apiSection').style.display='none';
-    alert('API Key 有效，已保存');
-  }else{$('apiStatus').innerHTML='<span class="dot-fail">● 失效</span>';alert('API Key 无效: '+r.error);}
-}
-
 // ── TAB 1: Analyze ──
 let analyzeList=[],analyzeChecks={};
 async function refreshAnalyze(){
@@ -304,44 +245,23 @@ async function saveConfig(){
   let cfg={min_alt_deviation_ft:parseInt($('aAlt').value),min_duration_nm:parseInt($('aDur').value)};
   await api('/save_config',{method:'POST',body:cfg});alert('配置已保存');
 }
-async function runAnalysis(){
+async function archiveCurrentCsv(){
+  if(!confirm('归档后当前偏差分析列表会清空，旧数据会移动到 flight_csv_archive。继续吗？')) return;
+  let r=await api('/archive_csv',{method:'POST',body:{}});
+  if(!r) return;
+  analyzeChecks={};
+  await refreshAnalyze();
+  alert(r.status||'已归档');
+}
+async function runAllReports(){
   let keys=analyzeList.filter(f=>analyzeChecks[f.key]!==false).map(f=>f.key);
   if(!keys.length){alert('请勾选航班');return;}
   let cfg={min_alt_deviation_ft:parseInt($('aAlt').value),min_duration_nm:parseInt($('aDur').value)};
-  setStatus('analyzeMsg','分析中...');setProgress('analyzeProgress',0);
-  let r=await api('/analyze',{method:'POST',body:{keys,config:cfg}});
-  setProgress('analyzeProgress',100);if(!r){setStatus('analyzeMsg','分析失败');return;}
+  setStatus('analyzeMsg','分析并生成统计表、附件和 HTML 报告...');setProgress('analyzeProgress',0);
+  let r=await api('/run_all_reports',{method:'POST',body:{keys,config:cfg}});
+  setProgress('analyzeProgress',100);if(!r){setStatus('analyzeMsg','生成失败');return;}
   setStatus('analyzeMsg',r.status||('完成 '+r.count+' 个航班'));
-}
-async function genWordReport(){
-  setStatus('analyzeMsg','生成 Word 报告...');setProgress('analyzeProgress',0);
-  let r=await api('/gen_word',{method:'POST',body:{}});
-  setProgress('analyzeProgress',100);if(!r){setStatus('analyzeMsg','Word 报告失败');return;}
-  setStatus('analyzeMsg',r.status||'Word 报告已生成');refreshReports();
-}
-async function genHtmlReport(){
-  setStatus('analyzeMsg','生成 HTML 报告...');setProgress('analyzeProgress',0);
-  let r=await api('/gen_html',{method:'POST',body:{}});
-  setProgress('analyzeProgress',100);if(!r){setStatus('analyzeMsg','HTML 报告失败');return;}
-  setStatus('analyzeMsg',r.status||'HTML 报告已生成');refreshReports();
-}
-async function runAll(){await runAnalysis();setTimeout(genWordReport,2000);setTimeout(genHtmlReport,4000);}
-
-// ── TAB 1: Prompt Editor ──
-async function loadPrompt(){let r=await api('/load_prompt');if(r){$('promptText').value=r.prompt||'';setStatus('promptMsg','已加载');}}
-async function savePrompt(){
-  let r=await api('/save_prompt',{method:'POST',body:{prompt:$('promptText').value}});
-  if(r)setStatus('promptMsg','已保存');
-}
-async function resetPrompt(){let r=await api('/reset_prompt');if(r){$('promptText').value=r.prompt||'';setStatus('promptMsg','已恢复默认');}}
-async function uploadRef(type){
-  let inp=$(type==='main'?'refMain':'refApp');
-  if(!inp.files[0])return;
-  let name=inp.files[0].name;
-  $(type==='main'?'refMainName':'refAppName').textContent=name;
-  let fd=new FormData();fd.append('file',inp.files[0]);fd.append('type',type);
-  let r=await apiForm('/upload_ref',fd);
-  if(r){setStatus('promptMsg','参考文件已上传');loadPrompt();}
+  refreshReports();
 }
 
 // ── TAB 2: Reports ──
@@ -354,19 +274,73 @@ async function refreshReports(){
 function openReportsFolder(){window.open('/reports/');}
 
 // Init
-loadApiCfg();loadPrompt();refreshAnalyze();refreshReports();
+refreshAnalyze();refreshReports();
 </script></body></html>
 """;
 
 # ─── HTTP Server ──────────────────────────────────────────────────────────────
+
+def archive_active_csv_data(csv_dir=None, archive_root=None):
+    """Move current working CSV data out of flight_csv before a new scrape batch."""
+    csv_dir = csv_dir or CSV_DIR
+    archive_root = archive_root or CSV_ARCHIVE_DIR
+    if not os.path.isdir(csv_dir):
+        return {"archived": 0, "archive_dir": ""}
+
+    candidates = []
+    for name in os.listdir(csv_dir):
+        path = os.path.join(csv_dir, name)
+        if os.path.isfile(path) and (name.lower().endswith(".csv") or name == "metadata.json"):
+            candidates.append(path)
+
+    if not candidates:
+        return {"archived": 0, "archive_dir": ""}
+
+    os.makedirs(archive_root, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    archive_dir = os.path.join(archive_root, stamp)
+    suffix = 2
+    while os.path.exists(archive_dir):
+        archive_dir = os.path.join(archive_root, f"{stamp}_{suffix}")
+        suffix += 1
+    os.makedirs(archive_dir, exist_ok=True)
+
+    for path in candidates:
+        shutil.move(path, os.path.join(archive_dir, os.path.basename(path)))
+
+    return {"archived": len(candidates), "archive_dir": archive_dir}
+
+
+def list_active_csv_files(csv_dir=None):
+    """List only the current working CSV files; archived data lives elsewhere."""
+    csv_dir = csv_dir or CSV_DIR
+    files = []
+    if not os.path.isdir(csv_dir):
+        return files
+    for f in os.listdir(csv_dir):
+        path = os.path.join(csv_dir, f)
+        if os.path.isfile(path) and f.endswith("_plan_track.csv"):
+            base = f.replace("_plan_track.csv", "")
+            actual_path = os.path.join(csv_dir, f"{base}_actual_track.csv")
+            if not os.path.isfile(actual_path):
+                continue
+            parsed = parse_flight_key(base)
+            if parsed.flight and parsed.date:
+                files.append({
+                    "key": base,
+                    "flight": parsed.flight,
+                    "date": display_datetime_from_key(base),
+                    "status": "CSV",
+                })
+    files.sort(key=lambda x: (x["date"], x["flight"]), reverse=True)
+    return files
+
 
 class FlightAPIHandler(BaseHTTPRequestHandler):
     search_pool = []
     analysis_results = {}
     last_config = {"min_alt_deviation_ft": 1000, "min_duration_nm": 50}
     country_index = None
-    ref_main_text = ""
-    ref_app_text = ""
 
     def log_message(self, format, *args): pass
 
@@ -376,9 +350,6 @@ class FlightAPIHandler(BaseHTTPRequestHandler):
         elif path == "/api/search": self._api_search()
         elif path == "/api/list_csv": self._api_list_csv()
         elif path == "/api/list_reports": self._api_list_reports()
-        elif path == "/api/load_api_cfg": self._api_load_api_cfg()
-        elif path == "/api/load_prompt": self._api_load_prompt()
-        elif path == "/api/reset_prompt": self._api_reset_prompt()
         elif path.startswith("/reports/"): self._serve_report_file(path)
         else: self._send_json({"error": "not found"}, 404)
 
@@ -386,21 +357,14 @@ class FlightAPIHandler(BaseHTTPRequestHandler):
         body = self._read_body()
         path = self.path.split("?")[0]
 
-        # multipart upload
-        ctype = self.headers.get("Content-Type", "")
-        if "multipart/form-data" in ctype and path == "/api/upload_ref":
-            self._api_upload_ref()
-            return
-
         data = json.loads(body) if body else {}
         if path == "/api/scrape": self._api_scrape(data)
+        elif path == "/api/archive_csv": self._api_archive_csv()
         elif path == "/api/analyze": self._api_analyze(data)
+        elif path == "/api/run_all_reports": self._api_run_all_reports(data)
         elif path == "/api/gen_word": self._api_gen_word()
         elif path == "/api/gen_html": self._api_gen_html()
         elif path == "/api/save_config": self._save_config(data); self._send_json({"status":"ok"})
-        elif path == "/api/test_key": self._api_test_key(data)
-        elif path == "/api/save_key": self._api_save_key(data)
-        elif path == "/api/save_prompt": self._api_save_prompt(data)
         else: self._send_json({"error": "not found"}, 404)
 
     def _read_body(self):
@@ -433,48 +397,29 @@ class FlightAPIHandler(BaseHTTPRequestHandler):
             with open(fpath, "rb") as f: self.wfile.write(f.read())
         else: self._send_json({"error":"not found"}, 404)
 
-    # ── API: Config ──
-    def _api_load_api_cfg(self):
-        if os.path.exists(CONFIG_PATH):
-            with open(CONFIG_PATH) as f: cfg = json.load(f)
-            cfg["status"] = "ok"
-            self._send_json(cfg)
-        else: self._send_json({"status":"unset","api_key":"","model":"deepseek-v4-pro"})
-
-    def _api_test_key(self, data):
-        import requests as req
-        key = data.get("key",""); model = data.get("model","deepseek-v4-pro")
-        if not key: self._send_json({"ok":False,"error":"Key is empty"}); return
-        try:
-            r = req.post("https://api.deepseek.com/v1/chat/completions",
-                headers={"Authorization":f"Bearer {key}","Content-Type":"application/json"},
-                json={"model":model,"messages":[{"role":"user","content":"hi"}],"max_tokens":5}, timeout=15)
-            if r.status_code == 200: self._send_json({"ok":True})
-            else: self._send_json({"ok":False,"error":f"HTTP {r.status_code}: {r.text[:100]}"})
-        except Exception as e: self._send_json({"ok":False,"error":str(e)[:100]})
-
-    def _api_save_key(self, data):
-        cfg = {}
-        if os.path.exists(CONFIG_PATH):
-            with open(CONFIG_PATH) as f: cfg = json.load(f)
-        cfg["api_key"] = data.get("key","")
-        cfg["model"] = data.get("model","deepseek-v4-pro")
-        with open(CONFIG_PATH,"w") as f: json.dump(cfg, f, indent=2)
-        self._send_json({"status":"ok"})
-
     # ── API: Search ──
     def _api_search(self):
         qs = urllib.parse.urlparse(self.path).query
         params = urllib.parse.parse_qs(qs)
-        flight_nums = [f.strip().upper() for f in params.get("flight",[""])[0].split(",") if f.strip()]
+        def parse_flights(name):
+            return [f.strip().upper() for f in params.get(name,[""])[0].split(",") if f.strip()]
+        outbound_nums = parse_flights("outbound")
+        return_nums = parse_flights("returnFlights")
+        legacy_nums = parse_flights("flight")
         aircraft = params.get("aircraft",[""])[0].strip().upper()
         date_from = params.get("from",[""])[0]; date_to = params.get("to",[""])[0]
-        if not flight_nums and not aircraft: self._send_json({"error":"请输入航班号或飞机号"}); return
+        if not outbound_nums and not return_nums and not legacy_nums and not aircraft:
+            self._send_json({"error":"请输入去程或回程航班号，或飞机号"}); return
 
         import requests as req
-        results = []; dep_counts = {}
-        search_terms = flight_nums if flight_nums else [aircraft]
-        for fn in search_terms:
+        results_by_key = {}; dep_counts = {}
+        search_terms = []
+        search_terms.extend((fn, "去程") for fn in outbound_nums)
+        search_terms.extend((fn, "回程") for fn in return_nums)
+        search_terms.extend((fn, "") for fn in legacy_nums)
+        if not search_terms and aircraft:
+            search_terms.append((aircraft, ""))
+        for fn, forced_dir in search_terms:
             try:
                 r = req.get(f"{SCRAPE_URL}/getFlightListByAN",
                     params={"fi":fn,"staDate":date_from,"endDate":date_to}, timeout=30)
@@ -486,22 +431,31 @@ class FlightAPIHandler(BaseHTTPRequestHandler):
                     if aircraft and aircraft not in ac.upper(): continue
                     dep = fl.get("tKO_FIELD",""); arr = fl.get("dES_FIELD","")
                     dep_counts[dep] = dep_counts.get(dep,0) + 1
-                    key = f"{tko}_{fid}"
-                    results.append({"key":key,"dir":"?","date":tko,"flight":fn,"ac":ac,
+                    key = build_flight_key(fid or fn, tko, fl.get("tKO_TIME", ""))
+                    if key in results_by_key:
+                        if forced_dir and results_by_key[key].get("dir") in ("", "?", "未知"):
+                            results_by_key[key]["dir"] = forced_dir
+                        continue
+                    results_by_key[key] = {"key":key,"dir":forced_dir or "未知","date":tko,"flight":fid or fn,"ac":ac,
                         "route":f"{dep}→{arr}","flightId":fid,"aircraft":ac,
                         "tkoTime":fl.get("tKO_TIME",""),"desTime":fl.get("dES_TIME",""),
-                        "tkoTimeOff":fl.get("tKO_TIME_OFF",""),"depAirport":dep,"arrAirport":arr})
+                        "tkoTimeOff":fl.get("tKO_TIME_OFF",""),"depAirport":dep,"arrAirport":arr}
             except Exception as e: print(f"  search error: {e}")
 
-        # Auto-detect base airport
+        # Fallback direction detection is only used for aircraft-only or legacy searches.
         auto_base = ""
         if dep_counts:
             auto_base = max(dep_counts, key=dep_counts.get)
-            for r2 in results:
-                if r2["dir"] == "?":
+            for r2 in results_by_key.values():
+                if r2["dir"] in ("", "?", "未知"):
                     if r2["depAirport"] == auto_base: r2["dir"] = "去程"
                     elif r2["arrAirport"] == auto_base: r2["dir"] = "回程"
                     else: r2["dir"] = "未知"
+        results = sorted(
+            results_by_key.values(),
+            key=lambda item: (item.get("date",""), item.get("tkoTime",""), item.get("flight","")),
+            reverse=True,
+        )
         self._send_json({"results":results,"autoBase":auto_base})
 
     # ── API: Scrape ──
@@ -509,7 +463,8 @@ class FlightAPIHandler(BaseHTTPRequestHandler):
         flights = data.get("flights",[])
         if not flights: self._send_json({"status":"无航班"}); return
         import requests as req
-        csv_dir = os.path.join(BASE_DIR,"flight_csv"); os.makedirs(csv_dir,exist_ok=True)
+        csv_dir = CSV_DIR; os.makedirs(csv_dir,exist_ok=True)
+        archive_result = archive_active_csv_data(csv_dir)
         results = []
         for fl_info in flights:
             s = {"flight":fl_info.get("flight","?"),"date":fl_info.get("date","?"),"ok":False,"detail":""}
@@ -518,10 +473,13 @@ class FlightAPIHandler(BaseHTTPRequestHandler):
                 dep=fl_info.get("depAirport","");arr=fl_info.get("arrAirport","")
                 tko=fl_info.get("tkoTime","");des=fl_info.get("desTime","")
                 tko_off=fl_info.get("tkoTimeOff","");fdate=tko[:10] if tko else fl_info.get("date","")
-                prefix=os.path.join(csv_dir,f"{fn}_{fdate}");details=[]
+                file_key = build_flight_key(fid or fn, fdate, tko)
+                prefix=os.path.join(csv_dir,file_key);details=[]
+                plan_saved = False
+                actual_saved = False
                 plan=get_flight_plan_points(fid,ac,dep,arr,tko_off or tko)
                 if plan and len(plan)>0:
-                    save_csv(plan,f"{prefix}_plan_track.csv")
+                    plan_saved = save_csv(plan,f"{prefix}_plan_track.csv")
                     save_csv(plan,f"{prefix}_plan_profile.csv",["name","dist","alt","ful","time","lat","lon"])
                     details.append(f"plan={len(plan)}pts")
                 else: details.append("plan=empty")
@@ -529,26 +487,46 @@ class FlightAPIHandler(BaseHTTPRequestHandler):
                 ad=actual
                 if isinstance(actual,dict): ad=actual.get("data",[])
                 if ad and len(ad)>0:
-                    save_csv(ad,f"{prefix}_actual_track.csv")
+                    actual_saved = save_csv(ad,f"{prefix}_actual_track.csv")
                     save_csv(ad,f"{prefix}_actual_profile.csv",["gateway_time","alt","fob","dis","lat","lon","posPointName","sAlt","type"])
                     details.append(f"actual={len(ad)}pts")
                 else: details.append("actual=empty")
-                s["ok"]=True;s["detail"]=", ".join(details)
+                if plan_saved and actual_saved:
+                    try:
+                        from local_report import save_metadata_entry
+                        save_metadata_entry(file_key, {
+                            "flight_id": fid,
+                            "flight": fn,
+                            "aircraft": ac,
+                            "dep_airport": dep,
+                            "arr_airport": arr,
+                            "tko_time": tko,
+                            "des_time": des,
+                            "direction": fl_info.get("dir", ""),
+                        })
+                    except Exception as meta_error:
+                        details.append(f"metadata={str(meta_error)[:40]}")
+                else:
+                    details.append("missing required csv")
+                s["ok"]=plan_saved and actual_saved;s["detail"]=", ".join(details)
             except Exception as e: s["detail"]=str(e)[:100]
             results.append(s)
         ok_count=sum(1 for r in results if r["ok"])
-        self._send_json({"status":f"完成 {ok_count}/{len(results)} 个航班","results":results})
+        prefix = f"已归档旧数据 {archive_result['archived']} 个文件；" if archive_result["archived"] else ""
+        self._send_json({"status":f"{prefix}完成 {ok_count}/{len(results)} 个航班","results":results,
+            "archive": {"count": archive_result["archived"], "dir": os.path.basename(archive_result["archive_dir"])}})
+
+    def _api_archive_csv(self):
+        result = archive_active_csv_data()
+        if result["archived"]:
+            self._send_json({"status":f"已归档当前数据 {result['archived']} 个文件到 {os.path.basename(result['archive_dir'])}",
+                "count": result["archived"], "dir": os.path.basename(result["archive_dir"])})
+        else:
+            self._send_json({"status":"当前没有可归档的 CSV 数据","count":0,"dir":""})
 
     # ── API: List ──
     def _api_list_csv(self):
-        files=[];csv_dir=os.path.join(BASE_DIR,"flight_csv")
-        for root,dirs,fnames in os.walk(csv_dir):
-            for f in fnames:
-                if f.endswith("_plan_track.csv"):
-                    base=f.replace("_plan_track.csv","");parts=base.split("_")
-                    if len(parts)>=2: files.append({"key":f"{parts[0]}_{parts[1]}","flight":parts[0],"date":parts[1],"status":"CSV ✓"})
-        files.sort(key=lambda x:(x["date"],x["flight"]),reverse=True)
-        self._send_json({"files":files})
+        self._send_json({"files":list_active_csv_files()})
 
     def _api_list_reports(self):
         files=[]
@@ -560,132 +538,81 @@ class FlightAPIHandler(BaseHTTPRequestHandler):
         self._send_json({"files":files})
 
     # ── API: Analyze ──
-    def _api_analyze(self, data):
-        keys=data.get("keys",[]);config=data.get("config",{"min_alt_deviation_ft":1000,"min_duration_nm":200})
-        if FlightAPIHandler.country_index is None: FlightAPIHandler.country_index = CountryIndex(GEOJSON_PATH)
-        results={}
+    def _run_analysis(self, keys, config):
+        if FlightAPIHandler.country_index is None:
+            FlightAPIHandler.country_index = CountryIndex(GEOJSON_PATH)
+        results = {}
         for key in keys:
-            parts=key.split("_",1);fn,ds=parts[0],parts[1] if len(parts)>1 else ""
-            pf,af=find_csv_files(fn,ds)
+            parsed = parse_flight_key(key)
+            fn, ds = parsed.flight, parsed.date_key
+            pf, af = find_csv_files(fn, ds)
             if pf and af:
-                r=analyze_flight(pf,af,config,FlightAPIHandler.country_index)
-                if r: results[key]=r
-        FlightAPIHandler.analysis_results=results
-        FlightAPIHandler.last_config=config
+                r = analyze_flight(pf, af, config, FlightAPIHandler.country_index)
+                if r:
+                    results[key] = r
+        FlightAPIHandler.analysis_results = results
+        FlightAPIHandler.last_config = config
+        return results
+
+    def _analysis_payload(self):
+        return {
+            "flights": FlightAPIHandler.analysis_results,
+            "analysis_time": datetime.now().isoformat(),
+        }
+
+    def _api_analyze(self, data):
+        keys=data.get("keys",[]);config=data.get("config",{"min_alt_deviation_ft":1000,"min_duration_nm":50})
+        results = self._run_analysis(keys, config)
         self._send_json({"status":f"完成 {len(results)} 个航班","count":len(results)})
 
     # ── API: Generate Reports ──
-    def _get_sys_prompt(self):
-        """Build system prompt with optional reference docs."""
-        from review_report import build_system_prompt
-        return build_system_prompt(FlightAPIHandler.ref_main_text, FlightAPIHandler.ref_app_text)
+    def _api_run_all_reports(self, data):
+        keys = data.get("keys", [])
+        config = data.get("config", {"min_alt_deviation_ft": 1000, "min_duration_nm": 50})
+        if not keys:
+            self._send_json({"status":"请先勾选航班","count":0}); return
+        try:
+            results = self._run_analysis(keys, config)
+            if not results:
+                self._send_json({"status":"未分析出可生成报告的航班","count":0}); return
+            from local_report import generate_stats_report, generate_appendix_report, generate_table_html_report
+            analysis = self._analysis_payload()
+            stats_path = generate_stats_report(analysis, REPORTS_DIR)
+            appendix_path = generate_appendix_report(analysis, REPORTS_DIR)
+            html_path = generate_table_html_report(analysis, config, REPORTS_DIR)
+        except Exception as e:
+            self._send_json({"status":f"生成失败: {e}"}); return
+        files = [os.path.basename(stats_path), os.path.basename(appendix_path), os.path.basename(html_path)]
+        self._send_json({
+            "status": f"完成 {len(results)} 个航班，统计表 Word、附件 Word、HTML 表格报告已生成",
+            "count": len(results),
+            "files": files,
+        })
 
     def _api_gen_word(self):
         if not FlightAPIHandler.analysis_results: self._send_json({"status":"请先运行分析"}); return
-        from review_report import finalize_to_docx, build_user_prompt, call_deepseek, load_api_config
-        analysis={"flights":FlightAPIHandler.analysis_results,"analysis_time":datetime.now().isoformat()}
-        api_cfg=load_api_config();rn="航线分析"
-        for k in FlightAPIHandler.analysis_results: rn=k.split("_")[0];break
-        dl=sorted(set(k.rsplit("_",1)[1] for k in FlightAPIHandler.analysis_results))
-        sp=self._get_sys_prompt()
-        up=build_user_prompt(analysis,{"route_name":rn,"date_range":f"{dl[0]}至{dl[-1]}"})
+        from local_report import generate_stats_report, generate_appendix_report
+        analysis = self._analysis_payload()
         try:
-            api_resp=call_deepseek([{"role":"system","content":sp},{"role":"user","content":up}],api_cfg)
-        except Exception as e: self._send_json({"status":f"API 错误: {e}"}); return
-        ts=datetime.now().strftime("%Y%m%d_%H%M")
-        dp=os.path.join(REPORTS_DIR,f"{rn}_draft_{ts}.md")
-        with open(dp,"w",encoding="utf-8") as f: f.write(api_resp)
-        finalize_to_docx(dp,analysis,dp.replace(".md",".docx"))
-        self._send_json({"status":"Word 报告已生成"})
+            path = generate_stats_report(analysis, REPORTS_DIR)
+            appendix_path = generate_appendix_report(analysis, REPORTS_DIR)
+        except Exception as e:
+            self._send_json({"status":f"生成失败: {e}"}); return
+        self._send_json({
+            "status":"统计表 Word 和附件 Word 已生成",
+            "files":[os.path.basename(path), os.path.basename(appendix_path)],
+        })
 
     def _api_gen_html(self):
         if not FlightAPIHandler.analysis_results: self._send_json({"status":"请先运行分析"}); return
-        from review_report import generate_integrated_html, build_user_prompt, call_deepseek, load_api_config
-        analysis={"flights":FlightAPIHandler.analysis_results,"analysis_time":datetime.now().isoformat()}
-        api_cfg=load_api_config();rn="航班分析"
-        for k in FlightAPIHandler.analysis_results: rn=k.split("_")[0];break
-        dl=sorted(set(k.rsplit("_",1)[1] for k in FlightAPIHandler.analysis_results))
+        from local_report import generate_table_html_report
+        analysis = self._analysis_payload()
         config = FlightAPIHandler.last_config
-        sp=self._get_sys_prompt()
-        up=build_user_prompt(analysis,{"route_name":rn,"date_range":f"{dl[0]}至{dl[-1]}"})
         try:
-            api_resp=call_deepseek([{"role":"system","content":sp},{"role":"user","content":up}],api_cfg)
-        except Exception as e: self._send_json({"status":f"API 错误: {e}"}); return
-        ts=datetime.now().strftime("%Y%m%d_%H%M")
-        hp=os.path.join(REPORTS_DIR,f"{rn}_integrated_{ts}.html")
-        generate_integrated_html(analysis,api_resp,config,hp)
-        self._send_json({"status":"HTML 报告已生成"})
-
-    # ── API: Prompt ──
-    def _api_load_prompt(self):
-        prompt = ""
-        if os.path.exists(PROMPT_PATH):
-            with open(PROMPT_PATH,"r",encoding="utf-8") as f: prompt = f.read()
-        if not prompt:
-            from review_report import build_system_prompt
-            prompt = build_system_prompt()
-        self._send_json({"prompt":prompt})
-
-    def _api_save_prompt(self, data):
-        prompt = data.get("prompt","")
-        with open(PROMPT_PATH,"w",encoding="utf-8") as f: f.write(prompt)
-        self._send_json({"status":"ok"})
-
-    def _api_reset_prompt(self):
-        if os.path.exists(PROMPT_PATH): os.remove(PROMPT_PATH)
-        from review_report import build_system_prompt
-        self._send_json({"prompt":build_system_prompt()})
-
-    def _api_upload_ref(self):
-        """Handle multipart file upload for reference docs."""
-        ctype = self.headers.get("Content-Type","")
-        length = int(self.headers.get("Content-Length",0))
-        raw = self.rfile.read(length)
-
-        boundary = None
-        for part in ctype.split(";"):
-            if "boundary=" in part:
-                boundary = part.split("boundary=")[1].strip().strip('"')
-                break
-        if not boundary: self._send_json({"status":"no boundary"}); return
-
-        # Parse type field
-        ref_type = "main"
-        ref_content = None
-        for segment in raw.split(b"--"+boundary.encode()):
-            if b"Content-Disposition" not in segment: continue
-            header_end = segment.find(b"\r\n\r\n")
-            if header_end < 0: continue
-            headers = segment[:header_end].decode("utf-8","ignore")
-            content = segment[header_end+4:]
-            content = content.rstrip(b"\r\n--\r\n").rstrip(b"\r\n--").rstrip(b"\r\n")
-
-            if 'name="type"' in headers:
-                ref_type = content.decode("utf-8","ignore").strip()
-            elif 'name="file"' in headers and b"filename=" in segment[:header_end]:
-                ref_content = content
-
-        if not ref_content:
-            self._send_json({"status":"no file content"}); return
-
-        try:
-            from docx import Document
-            tmp = os.path.join(BASE_DIR,"_tmp_ref.docx")
-            with open(tmp,"wb") as f: f.write(ref_content)
-            doc = Document(tmp)
-            text = "\n\n".join(p.text for p in doc.paragraphs if p.text.strip())
-            for table in doc.tables:
-                for row in table.rows:
-                    t = " | ".join(c.text.strip() for c in row.cells if c.text.strip())
-                    if t: text += "\n" + t
-            os.remove(tmp)
-            if ref_type == "app": FlightAPIHandler.ref_app_text = text
-            else: FlightAPIHandler.ref_main_text = text
+            path = generate_table_html_report(analysis, config, REPORTS_DIR)
         except Exception as e:
-            print(f"  upload_ref error: {e}")
-            self._send_json({"status":f"parse error: {e}"}); return
-
-        self._send_json({"status":"ok"})
+            self._send_json({"status":f"生成失败: {e}"}); return
+        self._send_json({"status":"HTML 表格报告已生成","file":os.path.basename(path)})
 
     def _save_config(self, cfg):
         with open(os.path.join(BASE_DIR,"analysis_config.json"),"w") as f:
@@ -698,7 +625,8 @@ def main():
     server=HTTPServer(("localhost",port),FlightAPIHandler)
     url=f"http://localhost:{port}"
     print(f"\n  航班分析服务器已启动\n  浏览器打开: {url}\n  按 Ctrl+C 停止\n")
-    webbrowser.open(url)
+    if os.environ.get("FLIGHT_SERVER_NO_BROWSER") != "1":
+        webbrowser.open(url)
     try: server.serve_forever()
     except KeyboardInterrupt: print("\n  服务器已停止"); server.shutdown()
 
