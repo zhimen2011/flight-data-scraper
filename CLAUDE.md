@@ -1,4 +1,0 @@
-# 可能的配置方式（需要查官方文档）
-CLAUDE_ALLOW_PRIVATE_IPS=true
-# 或
-CLAUDE_ALLOWED_DOMAINS="192.168.8.18:8082"
